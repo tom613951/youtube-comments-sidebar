@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube 评论移至右侧
 // @namespace    https://github.com/tampermonkey-scripts
-// @version      1.5
+// @version      1.6
 // @description  将 YouTube 评论区从视频下方移动到右侧推荐视频区域，隐藏推荐视频，章节面板内嵌显示
 // @author       Antigravity
 // @match        https://www.youtube.com/*
@@ -14,6 +14,8 @@
 (function () {
   'use strict';
 
+  const LOG = '[YT-Comments-Sidebar]';
+
   // ========== 注入自定义样式 ==========
   GM_addStyle(`
     /* --- 隐藏右侧推荐视频 --- */
@@ -21,7 +23,7 @@
       display: none !important;
     }
 
-    /* --- 评论区在右侧的样式 --- */
+    /* --- 评论区在右侧的样式（已移动后生效） --- */
     #secondary #comments.ytd-comments-moved {
       display: block !important;
       visibility: visible !important;
@@ -59,19 +61,26 @@
     }
 
     /*
-     * 关键修复：不使用 display:none 隐藏原位置评论区！
-     * display:none 会导致 YouTube 内部 IntersectionObserver 无法检测到评论区，
-     * 从而不会触发评论数据的 API 请求。
-     * 改用 opacity:0 + pointer-events:none，保持元素在布局中可被观察。
+     * 关键：原位置的评论区保持在布局中但视觉不可见。
+     * 不使用 display:none / max-height:1px，
+     * 因为 YouTube 依赖 IntersectionObserver 来决定是否加载评论，
+     * 元素必须在布局中占据正常空间，才能被 IO 检测到。
+     *
+     * 使用 position:absolute 脱离文档流（不占空间），
+     * 但仍然保持完整尺寸让 IO 可以观测到。
      */
+    #below {
+      position: relative !important;
+    }
     #below > #comments:not(.ytd-comments-moved) {
       opacity: 0 !important;
       pointer-events: none !important;
+      position: absolute !important;
+      top: 0 !important;
+      left: 0 !important;
+      width: 100% !important;
       z-index: -1 !important;
-      max-height: 1px !important;
-      overflow: hidden !important;
-      margin: 0 !important;
-      padding: 0 !important;
+      /* 注意：不限制 height/max-height，让元素保持完整尺寸 */
     }
 
     /* 评论区标题栏微调 */
@@ -113,8 +122,6 @@
     }
 
     /* ========== 章节面板（Chapters）内嵌样式 ========== */
-
-    /* 章节面板容器 - 移入右侧栏后的样式 */
     #secondary .ytd-chapters-panel-moved {
       display: block !important;
       position: relative !important;
@@ -134,24 +141,20 @@
       box-sizing: border-box;
     }
 
-    /* 深色模式 */
     html[dark] #secondary .ytd-chapters-panel-moved {
       background-color: var(--yt-spec-raised-background, #212121);
       border: 1px solid rgba(255, 255, 255, 0.1);
     }
-    /* 浅色模式 */
     html:not([dark]) #secondary .ytd-chapters-panel-moved {
       background-color: var(--yt-spec-raised-background, #f2f2f2);
       border: 1px solid rgba(0, 0, 0, 0.1);
     }
 
-    /* 章节面板内部内容区域自适应 */
     #secondary .ytd-chapters-panel-moved #content.ytd-engagement-panel-section-list-renderer {
       max-height: none !important;
       overflow: visible !important;
     }
 
-    /* 章节面板滚动条美化 */
     #secondary .ytd-chapters-panel-moved::-webkit-scrollbar {
       width: 5px;
     }
@@ -166,7 +169,6 @@
       background-color: rgba(128, 128, 128, 0.6);
     }
 
-    /* 章节面板标题栏固定在顶部 */
     #secondary .ytd-chapters-panel-moved #header.ytd-engagement-panel-section-list-renderer {
       position: sticky;
       top: 0;
@@ -180,12 +182,10 @@
       background-color: var(--yt-spec-raised-background, #f2f2f2);
     }
 
-    /* 防止原始位置残留 */
     ytd-watch-flexy ytd-engagement-panel-section-list-renderer[target-id*="macro-markers"].ytd-chapters-panel-moved {
       visibility: visible !important;
     }
 
-    /* 隐藏原始位置的面板（防止重复显示） */
     #panels ytd-engagement-panel-section-list-renderer[target-id*="macro-markers"][visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]:not(.ytd-chapters-panel-moved) {
       opacity: 0 !important;
       pointer-events: none !important;
@@ -195,134 +195,147 @@
       overflow: hidden !important;
     }
 
-    /* 迷你播放器模式下不受影响 */
     ytd-miniplayer #comments {
       display: none !important;
     }
   `);
 
-  // ========== 核心逻辑 ==========
+  // ========== 核心状态 ==========
 
   let moved = false;
   let chaptersObserver = null;
-  let pendingMoveTimer = null;
+  let commentsContentObserver = null;
+  let fallbackTimer = null;
 
-  const LOG_PREFIX = '[YouTube 评论移至右侧]';
+  // ========== 评论区移动逻辑 ==========
 
   /**
-   * 检查评论区是否已经接收到数据（YouTube 内部数据绑定完成）
-   * YouTube 会在评论区可见时通过 API 获取评论数据，
-   * 数据到达后会在 #comments 内部创建子组件。
+   * 检查评论区是否已接收到 YouTube 数据
    */
-  function hasCommentsData(commentsEl) {
-    // 检查是否有评论头部渲染器（表示数据已绑定）
-    if (commentsEl.querySelector('ytd-comments-header-renderer')) return true;
-    // 检查是否有评论条目（表示评论已加载）
-    if (commentsEl.querySelector('ytd-comment-thread-renderer')) return true;
-    // 检查是否有 item-section-renderer（表示框架已就绪）
-    if (commentsEl.querySelector('ytd-item-section-renderer #contents')) return true;
-    return false;
+  function hasCommentsContent(el) {
+    return !!(
+      el.querySelector('ytd-comments-header-renderer') ||
+      el.querySelector('ytd-comment-thread-renderer') ||
+      el.querySelector('ytd-item-section-renderer #contents')
+    );
   }
 
   /**
-   * 将评论区移动到右侧栏
-   * @param {boolean} forceMove - 是否强制移动（不等待数据加载）
+   * 将 #comments 移回 #below（原始位置），让 YouTube 正常加载数据
    */
-  function moveComments(forceMove = false) {
-    if (location.pathname !== '/watch') return false;
+  function returnCommentsToOriginal() {
+    const movedComments = document.querySelector('#secondary #comments.ytd-comments-moved');
+    if (!movedComments) return;
 
-    const comments = document.querySelector(
-      '#primary #comments, #below #comments, ytd-watch-flexy #comments:not(.ytd-comments-moved)'
-    );
-    const secondary = document.querySelector('#secondary, #secondary-inner');
+    movedComments.classList.remove('ytd-comments-moved');
+    const below = document.querySelector('#below');
+    if (below) {
+      below.appendChild(movedComments);
+      console.log(`${LOG} ↩️ 评论区已移回原位，等待 YouTube 加载新数据`);
+    }
+  }
+
+  /**
+   * 将 #comments 移动到右侧 #secondary
+   */
+  function moveCommentsToSidebar() {
+    if (moved || location.pathname !== '/watch') return false;
+
+    const comments = document.querySelector('#below #comments, #primary #comments');
+    const secondary = document.querySelector('#secondary');
 
     if (!comments || !secondary) return false;
+    if (comments.classList.contains('ytd-comments-moved')) { moved = true; return true; }
 
-    // 已经移动过了
-    if (comments.classList.contains('ytd-comments-moved')) return true;
-
-    // 除非强制移动，否则等待评论数据绑定完成再移动
-    // 这样可以确保 YouTube 的内部数据流不被中断
-    if (!forceMove && !hasCommentsData(comments)) {
-      return false;
-    }
-
-    // 确保 #related 被隐藏 (CSS 已处理，这里做双重保险)
+    // 隐藏推荐视频
     const related = secondary.querySelector('#related');
-    if (related) {
-      related.style.display = 'none';
-    }
+    if (related) related.style.display = 'none';
 
-    // 将评论区移动到右侧栏的最前面
+    // 移动
     comments.classList.add('ytd-comments-moved');
     secondary.prepend(comments);
-
-    console.log(`${LOG_PREFIX} ✅ 评论区已移动到右侧`);
     moved = true;
 
-    // 移动完成后通知浏览器布局变化，确保后续的懒加载评论也能正常触发
+    console.log(`${LOG} ✅ 评论区已移动到右侧`);
+
+    // 通知浏览器布局变化
     requestAnimationFrame(() => {
       window.dispatchEvent(new Event('resize'));
     });
 
-    // 评论移动完成后，开始监听章节面板
+    // 启动章节面板监听
     setupChaptersPanelWatcher();
-
     return true;
   }
 
   /**
-   * 查找并移动章节面板到右侧评论区顶部
+   * 强制触发 YouTube 的评论加载机制
+   * 通过短暂滚动到 #comments 位置让 IntersectionObserver 触发
    */
+  function nudgeCommentsLoading() {
+    const comments = document.querySelector('#below #comments:not(.ytd-comments-moved)');
+    if (!comments) return;
+
+    // 方法1: 派发滚动事件刺激 IO 重新检测
+    window.dispatchEvent(new Event('scroll'));
+
+    // 方法2: 短暂将元素滚入视口再滚回
+    const scrollY = window.scrollY;
+    comments.style.position = 'relative';
+    comments.style.opacity = '0.001';
+    comments.scrollIntoView({ behavior: 'instant', block: 'end' });
+
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: scrollY, behavior: 'instant' });
+      requestAnimationFrame(() => {
+        comments.style.position = '';
+        comments.style.opacity = '';
+      });
+    });
+
+    console.log(`${LOG} 🔄 已触发评论加载 (scroll nudge)`);
+  }
+
+  // ========== 章节面板逻辑 ==========
+
   function moveChaptersPanel() {
-    const secondary = document.querySelector('#secondary, #secondary-inner');
+    const secondary = document.querySelector('#secondary');
     if (!secondary) return;
 
-    const chapterPanels = document.querySelectorAll(
+    document.querySelectorAll(
       'ytd-engagement-panel-section-list-renderer[target-id*="macro-markers"]'
-    );
-
-    chapterPanels.forEach(panel => {
+    ).forEach(panel => {
       const isExpanded = panel.getAttribute('visibility') === 'ENGAGEMENT_PANEL_VISIBILITY_EXPANDED';
       const alreadyMoved = panel.classList.contains('ytd-chapters-panel-moved');
 
       if (isExpanded && !alreadyMoved) {
         panel.classList.add('ytd-chapters-panel-moved');
         secondary.prepend(panel);
-        console.log(`${LOG_PREFIX} ✅ 章节面板已移至评论区顶部`);
+        console.log(`${LOG} ✅ 章节面板已移至评论区顶部`);
       } else if (!isExpanded && alreadyMoved) {
         panel.classList.remove('ytd-chapters-panel-moved');
-        const panelsContainer = document.querySelector('#panels.ytd-watch-flexy, ytd-watch-flexy #panels');
-        if (panelsContainer) {
-          panelsContainer.appendChild(panel);
-        }
-        console.log(`${LOG_PREFIX} ↩️ 章节面板已关闭并归位`);
+        const panels = document.querySelector('ytd-watch-flexy #panels');
+        if (panels) panels.appendChild(panel);
+        console.log(`${LOG} ↩️ 章节面板已关闭并归位`);
       }
     });
   }
 
-  /**
-   * 监听章节面板的展开/关闭
-   */
   function setupChaptersPanelWatcher() {
-    if (chaptersObserver) {
-      chaptersObserver.disconnect();
-    }
-
+    if (chaptersObserver) chaptersObserver.disconnect();
     moveChaptersPanel();
 
-    chaptersObserver = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        if (mutation.type === 'attributes' && mutation.attributeName === 'visibility') {
-          const target = mutation.target;
-          if (target.tagName === 'YTD-ENGAGEMENT-PANEL-SECTION-LIST-RENDERER' &&
-              (target.getAttribute('target-id') || '').includes('macro-markers')) {
+    chaptersObserver = new MutationObserver(mutations => {
+      for (const m of mutations) {
+        if (m.type === 'attributes' && m.attributeName === 'visibility') {
+          if (m.target.tagName === 'YTD-ENGAGEMENT-PANEL-SECTION-LIST-RENDERER' &&
+              (m.target.getAttribute('target-id') || '').includes('macro-markers')) {
             moveChaptersPanel();
             return;
           }
         }
-        if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
-          for (const node of mutation.addedNodes) {
+        if (m.type === 'childList') {
+          for (const node of m.addedNodes) {
             if (node.nodeType === 1 && (
               node.tagName === 'YTD-ENGAGEMENT-PANEL-SECTION-LIST-RENDERER' ||
               node.querySelector?.('ytd-engagement-panel-section-list-renderer[target-id*="macro-markers"]')
@@ -335,118 +348,126 @@
       }
     });
 
-    const watchFlexy = document.querySelector('ytd-watch-flexy');
-    if (watchFlexy) {
-      chaptersObserver.observe(watchFlexy, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['visibility']
+    const wf = document.querySelector('ytd-watch-flexy');
+    if (wf) {
+      chaptersObserver.observe(wf, {
+        childList: true, subtree: true,
+        attributes: true, attributeFilter: ['visibility']
       });
     }
   }
 
+  // ========== 导航与生命周期 ==========
+
   /**
-   * 清理当前页面状态
+   * 清理所有状态和定时器
    */
-  function resetState() {
+  function cleanup() {
     moved = false;
-
-    if (pendingMoveTimer) {
-      clearTimeout(pendingMoveTimer);
-      pendingMoveTimer = null;
-    }
-
-    if (chaptersObserver) {
-      chaptersObserver.disconnect();
-      chaptersObserver = null;
-    }
-
-    document.querySelectorAll('.ytd-chapters-panel-moved').forEach(el => {
-      el.classList.remove('ytd-chapters-panel-moved');
-    });
+    if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+    if (commentsContentObserver) { commentsContentObserver.disconnect(); commentsContentObserver = null; }
+    if (chaptersObserver) { chaptersObserver.disconnect(); chaptersObserver = null; }
+    document.querySelectorAll('.ytd-chapters-panel-moved').forEach(el =>
+      el.classList.remove('ytd-chapters-panel-moved')
+    );
   }
 
   /**
-   * 核心调度：持续监听 DOM 变化，等待评论数据加载后再移动
+   * 核心流程：处理新的视频页面
    *
-   * 策略说明：
-   * 1. CSS 将原位置的 #comments 设为 opacity:0（而非 display:none），
-   *    这样 YouTube 的 IntersectionObserver 仍能检测到它并触发评论 API 请求。
-   * 2. 本函数通过 MutationObserver 监听 #comments 内部变化，
-   *    一旦检测到评论数据已加载（子组件出现），立即执行移动。
-   * 3. 同时设置一个 15 秒的兜底定时器，即使没检测到数据也强制移动。
+   * 1. 清理状态
+   * 2. 将 #comments 移回 #below 原位（如果之前被移走了）
+   * 3. 等待 YouTube 加载评论数据（IntersectionObserver 需要元素在原位）
+   * 4. 评论数据到达后，立即将 #comments 移至 #secondary
    */
-  function startWatchingForComments() {
-    if (moved || location.pathname !== '/watch') return;
+  function handleWatchPage() {
+    cleanup();
 
-    // 先尝试立即执行（可能评论已经加载好了，比如页面刷新的情况）
-    if (moveComments()) return;
+    // Step 1: 如果之前移动过评论，先移回原位
+    returnCommentsToOriginal();
 
-    console.log(`${LOG_PREFIX} ⏳ 等待评论数据加载...`);
+    console.log(`${LOG} 📺 开始监控评论加载...`);
 
-    // MutationObserver: 监听 #comments 内部出现子组件
-    const commentsObserver = new MutationObserver(() => {
-      if (moved) {
-        commentsObserver.disconnect();
-        return;
-      }
-      if (moveComments()) {
-        commentsObserver.disconnect();
-        console.log(`${LOG_PREFIX} ✅ 通过 DOM 监听检测到评论数据，已移动`);
+    // Step 2: 短暂延迟后触发评论加载
+    // 延迟是为了让 YouTube 的 DOM 更新完成
+    setTimeout(nudgeCommentsLoading, 500);
+    setTimeout(nudgeCommentsLoading, 1500);
+    setTimeout(nudgeCommentsLoading, 3000);
+
+    // Step 3: 监听 #comments 内部出现评论内容
+    commentsContentObserver = new MutationObserver(() => {
+      if (moved) { commentsContentObserver.disconnect(); return; }
+
+      const comments = document.querySelector('#below #comments, #primary #comments');
+      if (comments && hasCommentsContent(comments)) {
+        commentsContentObserver.disconnect();
+        console.log(`${LOG} 📬 检测到评论数据已加载`);
+        moveCommentsToSidebar();
       }
     });
 
-    // 监听整个 primary 区域（因为 #comments 本身可能还没出现）
     const watchTarget = document.querySelector('ytd-watch-flexy') || document.body;
-    commentsObserver.observe(watchTarget, {
-      childList: true,
-      subtree: true,
-    });
+    commentsContentObserver.observe(watchTarget, { childList: true, subtree: true });
 
-    // 兜底：15 秒后如果还没移动成功，强制移动（即使评论还没加载也先占位）
-    pendingMoveTimer = setTimeout(() => {
+    // Step 4: 先检查一次（评论可能已经加载好了）
+    const existingComments = document.querySelector('#below #comments, #primary #comments');
+    if (existingComments && hasCommentsContent(existingComments)) {
+      console.log(`${LOG} 📬 评论数据已存在，直接移动`);
+      commentsContentObserver.disconnect();
+      moveCommentsToSidebar();
+      return;
+    }
+
+    // Step 5: 兜底定时器 - 10 秒后强制移动
+    fallbackTimer = setTimeout(() => {
       if (!moved && location.pathname === '/watch') {
-        commentsObserver.disconnect();
-        console.log(`${LOG_PREFIX} ⏰ 超时兜底，强制移动评论区`);
-        moveComments(true); // 强制移动
+        console.log(`${LOG} ⏰ 10s 超时兜底，强制移动`);
+        if (commentsContentObserver) commentsContentObserver.disconnect();
+        moveCommentsToSidebar();
       }
-    }, 15000);
+    }, 10000);
   }
 
   /**
-   * 处理页面导航（统一入口）
+   * 处理页面导航事件
    */
   function handleNavigation() {
-    resetState();
-
     if (location.pathname === '/watch') {
-      console.log(`${LOG_PREFIX} 📺 检测到视频页面`);
-      startWatchingForComments();
+      handleWatchPage();
+    } else {
+      cleanup();
     }
   }
 
   // ========== 初始化 ==========
 
-  // 1. 监听 YouTube SPA 导航事件
-  document.addEventListener('yt-navigate-finish', handleNavigation);
+  // YouTube SPA 导航事件
+  document.addEventListener('yt-navigate-finish', () => {
+    console.log(`${LOG} 🧭 yt-navigate-finish → ${location.pathname}`);
+    handleNavigation();
+  });
 
-  // 2. 监听 yt-page-data-updated 事件（部分场景比 yt-navigate-finish 晚触发）
+  // 页面数据更新事件（某些场景晚于 yt-navigate-finish）
   document.addEventListener('yt-page-data-updated', () => {
     if (location.pathname === '/watch' && !moved) {
-      // 数据更新后短暂等待 DOM 渲染
-      setTimeout(() => moveComments(), 200);
+      console.log(`${LOG} 📦 yt-page-data-updated，检查评论...`);
+      const c = document.querySelector('#below #comments, #primary #comments');
+      if (c && hasCommentsContent(c)) {
+        moveCommentsToSidebar();
+      } else {
+        // 再次触发加载
+        setTimeout(nudgeCommentsLoading, 300);
+      }
     }
   });
 
-  // 3. popstate 事件（浏览器前进/后退按钮）
-  window.addEventListener('popstate', () => {
-    setTimeout(handleNavigation, 300);
-  });
+  // 浏览器前进/后退
+  window.addEventListener('popstate', () => setTimeout(handleNavigation, 300));
 
-  // 4. 首次加载
+  // 首次加载
+  console.log(`${LOG} 🚀 脚本已加载，当前路径: ${location.pathname}`);
   if (location.pathname === '/watch') {
-    handleNavigation();
+    handleWatchPage();
   }
 
 })();
