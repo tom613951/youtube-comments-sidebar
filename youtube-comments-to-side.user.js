@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube 评论移至右侧
 // @namespace    https://github.com/tampermonkey-scripts
-// @version      1.6
+// @version      1.7
 // @description  将 YouTube 评论区从视频下方移动到右侧推荐视频区域，隐藏推荐视频，章节面板内嵌显示
 // @author       Antigravity
 // @match        https://www.youtube.com/*
@@ -39,10 +39,32 @@
       z-index: auto !important;
     }
 
-    /* 让右侧栏保持可见 */
+    /* 强制右侧栏可见并设定宽度 */
+    /* YouTube 可能在 SPA 导航时隐藏 #secondary 或将其压缩为 0 宽度 */
+    ytd-watch-flexy #columns.ytd-watch-flexy {
+      display: flex !important;
+      flex-direction: row !important;
+    }
+    ytd-watch-flexy #primary.ytd-watch-flexy {
+      flex: 1 !important;
+      min-width: 0 !important;
+      max-width: calc(100% - 402px - 24px) !important;
+    }
+    ytd-watch-flexy #secondary.ytd-watch-flexy,
     #secondary {
       display: block !important;
-      min-width: 0 !important;
+      min-width: 402px !important;
+      width: 402px !important;
+      max-width: 402px !important;
+      flex-shrink: 0 !important;
+      flex-basis: 402px !important;
+      padding-left: 24px !important;
+      box-sizing: content-box !important;
+    }
+    /* 确保 #secondary-inner 也可见 */
+    #secondary #secondary-inner,
+    #secondary-inner {
+      display: block !important;
     }
 
     /* 美化滚动条 */
