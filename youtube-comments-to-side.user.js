@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube 评论移至右侧
 // @namespace    https://github.com/tampermonkey-scripts
-// @version      1.8
+// @version      1.9
 // @description  将 YouTube 评论区从视频下方移动到右侧推荐视频区域，隐藏推荐视频，章节面板内嵌显示
 // @author       Antigravity
 // @match        https://www.youtube.com/*
@@ -131,8 +131,8 @@
       max-height: calc(100vh - 80px);
     }
 
-    /* ========== 章节面板 ========== */
-    ytd-watch-flexy #secondary .ytd-chapters-panel-moved {
+    /* ========== 通用面板内嵌样式（章节 & 合辑共用） ========== */
+    ytd-watch-flexy #secondary .ytd-panel-inline {
       display: block !important;
       position: relative !important;
       top: auto !important; left: auto !important;
@@ -143,44 +143,71 @@
       z-index: 5; margin-bottom: 12px;
       border-radius: 12px; box-sizing: border-box;
     }
-    html[dark] ytd-watch-flexy #secondary .ytd-chapters-panel-moved {
+    html[dark] ytd-watch-flexy #secondary .ytd-panel-inline {
       background-color: var(--yt-spec-raised-background, #212121);
       border: 1px solid rgba(255, 255, 255, 0.1);
     }
-    html:not([dark]) ytd-watch-flexy #secondary .ytd-chapters-panel-moved {
+    html:not([dark]) ytd-watch-flexy #secondary .ytd-panel-inline {
       background-color: var(--yt-spec-raised-background, #f2f2f2);
       border: 1px solid rgba(0, 0, 0, 0.1);
     }
-    ytd-watch-flexy #secondary .ytd-chapters-panel-moved #content.ytd-engagement-panel-section-list-renderer {
+    ytd-watch-flexy #secondary .ytd-panel-inline #content.ytd-engagement-panel-section-list-renderer {
       max-height: none !important; overflow: visible !important;
     }
-    ytd-watch-flexy #secondary .ytd-chapters-panel-moved::-webkit-scrollbar { width: 5px; }
-    ytd-watch-flexy #secondary .ytd-chapters-panel-moved::-webkit-scrollbar-track { background: transparent; }
-    ytd-watch-flexy #secondary .ytd-chapters-panel-moved::-webkit-scrollbar-thumb {
+    ytd-watch-flexy #secondary .ytd-panel-inline::-webkit-scrollbar { width: 5px; }
+    ytd-watch-flexy #secondary .ytd-panel-inline::-webkit-scrollbar-track { background: transparent; }
+    ytd-watch-flexy #secondary .ytd-panel-inline::-webkit-scrollbar-thumb {
       background-color: rgba(128, 128, 128, 0.35); border-radius: 3px;
     }
-    ytd-watch-flexy #secondary .ytd-chapters-panel-moved #header.ytd-engagement-panel-section-list-renderer {
+    ytd-watch-flexy #secondary .ytd-panel-inline #header.ytd-engagement-panel-section-list-renderer {
       position: sticky; top: 0; z-index: 10; border-radius: 12px 12px 0 0;
     }
-    html[dark] ytd-watch-flexy #secondary .ytd-chapters-panel-moved #header.ytd-engagement-panel-section-list-renderer {
+    html[dark] ytd-watch-flexy #secondary .ytd-panel-inline #header.ytd-engagement-panel-section-list-renderer {
       background-color: var(--yt-spec-raised-background, #212121);
     }
-    html:not([dark]) ytd-watch-flexy #secondary .ytd-chapters-panel-moved #header.ytd-engagement-panel-section-list-renderer {
+    html:not([dark]) ytd-watch-flexy #secondary .ytd-panel-inline #header.ytd-engagement-panel-section-list-renderer {
       background-color: var(--yt-spec-raised-background, #f2f2f2);
     }
-    ytd-watch-flexy ytd-engagement-panel-section-list-renderer[target-id*="macro-markers"].ytd-chapters-panel-moved {
+
+    /* 章节面板：保持可见 */
+    ytd-watch-flexy ytd-engagement-panel-section-list-renderer[target-id*="macro-markers"].ytd-panel-inline {
       visibility: visible !important;
     }
-    #panels ytd-engagement-panel-section-list-renderer[target-id*="macro-markers"][visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]:not(.ytd-chapters-panel-moved) {
+    /* 隐藏章节面板原始位置 */
+    #panels ytd-engagement-panel-section-list-renderer[target-id*="macro-markers"][visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]:not(.ytd-panel-inline) {
       opacity: 0 !important; pointer-events: none !important;
       position: absolute !important; width: 0 !important; height: 0 !important; overflow: hidden !important;
     }
+
+    /* ========== 合辑面板（Playlist） ========== */
+    ytd-watch-flexy #secondary ytd-playlist-panel-renderer.ytd-panel-inline {
+      display: block !important;
+      position: relative !important;
+      top: auto !important; left: auto !important;
+      right: auto !important; bottom: auto !important;
+      width: 100% !important; max-width: 100% !important;
+      height: auto !important; max-height: 45vh;
+      overflow-y: auto; overflow-x: hidden;
+      z-index: 5; margin-bottom: 12px;
+      border-radius: 12px; box-sizing: border-box;
+    }
+    /* 合辑面板内部滚动条 */
+    ytd-watch-flexy #secondary ytd-playlist-panel-renderer.ytd-panel-inline::-webkit-scrollbar { width: 5px; }
+    ytd-watch-flexy #secondary ytd-playlist-panel-renderer.ytd-panel-inline::-webkit-scrollbar-track { background: transparent; }
+    ytd-watch-flexy #secondary ytd-playlist-panel-renderer.ytd-panel-inline::-webkit-scrollbar-thumb {
+      background-color: rgba(128, 128, 128, 0.35); border-radius: 3px;
+    }
+    /* 合辑面板标题固定 */
+    ytd-watch-flexy #secondary ytd-playlist-panel-renderer.ytd-panel-inline #header-description.ytd-playlist-panel-renderer {
+      position: sticky; top: 0; z-index: 10;
+    }
+
     ytd-miniplayer #comments { display: none !important; }
   `);
 
   // ========== 核心状态 ==========
   let moved = false;
-  let chaptersObserver = null;
+  let panelsObserver = null;
 
   // ========== 工具函数 ==========
 
@@ -259,16 +286,19 @@
     // 强制右侧栏可见
     forceSecondaryVisible();
 
-    // 移动评论
+    // 移动评论到右侧栏末尾（排在面板之后）
     comments.classList.add('ytd-comments-moved');
     const inner = secondary.querySelector('#secondary-inner') || secondary;
-    inner.prepend(comments);
+    inner.appendChild(comments);
     moved = true;
 
     console.log(`${LOG} ✅ 评论区已移动到右侧`);
 
+    // 整理面板顺序：分段 → 合辑 → 评论
+    arrangeSecondaryOrder();
+
     requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
-    setupChaptersPanelWatcher();
+    setupPanelsWatcher();
     return true;
   }
 
@@ -291,9 +321,12 @@
     });
   }
 
-  // ========== 章节面板 ==========
+  // ========== 面板管理（章节 + 合辑） ==========
 
-  function moveChaptersPanel() {
+  /**
+   * 处理章节面板（分段）
+   */
+  function handleChaptersPanel() {
     const secondary = document.querySelector('ytd-watch-flexy #secondary');
     if (!secondary) return;
     const inner = secondary.querySelector('#secondary-inner') || secondary;
@@ -302,40 +335,122 @@
       'ytd-engagement-panel-section-list-renderer[target-id*="macro-markers"]'
     ).forEach(panel => {
       const expanded = panel.getAttribute('visibility') === 'ENGAGEMENT_PANEL_VISIBILITY_EXPANDED';
-      const wasMoved = panel.classList.contains('ytd-chapters-panel-moved');
+      const wasMoved = panel.classList.contains('ytd-panel-inline');
       if (expanded && !wasMoved) {
-        panel.classList.add('ytd-chapters-panel-moved');
+        panel.classList.add('ytd-panel-inline');
+        panel.dataset.panelType = 'chapters';
         inner.prepend(panel);
+        console.log(`${LOG} ✅ 章节面板已内嵌`);
       } else if (!expanded && wasMoved) {
-        panel.classList.remove('ytd-chapters-panel-moved');
+        panel.classList.remove('ytd-panel-inline');
+        delete panel.dataset.panelType;
+        const p = document.querySelector('ytd-watch-flexy #panels');
+        if (p) p.appendChild(panel);
+        console.log(`${LOG} ↩️ 章节面板已关闭`);
+      }
+    });
+  }
+
+  /**
+   * 处理合辑面板（Playlist）
+   */
+  function handlePlaylistPanel() {
+    const secondary = document.querySelector('ytd-watch-flexy #secondary');
+    if (!secondary) return;
+    const inner = secondary.querySelector('#secondary-inner') || secondary;
+
+    // 合辑面板可能在 #secondary 中，也可能作为 engagement-panel 出现
+    const playlistPanel = inner.querySelector('ytd-playlist-panel-renderer:not(.ytd-panel-inline)');
+    if (playlistPanel) {
+      playlistPanel.classList.add('ytd-panel-inline');
+      playlistPanel.dataset.panelType = 'playlist';
+      console.log(`${LOG} ✅ 合辑面板已内嵌`);
+    }
+
+    // 也检查 engagement panel 形式的合辑
+    document.querySelectorAll(
+      'ytd-engagement-panel-section-list-renderer[target-id*="playlist"]'
+    ).forEach(panel => {
+      const expanded = panel.getAttribute('visibility') === 'ENGAGEMENT_PANEL_VISIBILITY_EXPANDED';
+      const wasMoved = panel.classList.contains('ytd-panel-inline');
+      if (expanded && !wasMoved) {
+        panel.classList.add('ytd-panel-inline');
+        panel.dataset.panelType = 'playlist';
+        inner.appendChild(panel);
+        console.log(`${LOG} ✅ 合辑 engagement 面板已内嵌`);
+      } else if (!expanded && wasMoved && panel.dataset.panelType === 'playlist') {
+        panel.classList.remove('ytd-panel-inline');
+        delete panel.dataset.panelType;
         const p = document.querySelector('ytd-watch-flexy #panels');
         if (p) p.appendChild(panel);
       }
     });
   }
 
-  function setupChaptersPanelWatcher() {
-    if (chaptersObserver) chaptersObserver.disconnect();
-    moveChaptersPanel();
-    chaptersObserver = new MutationObserver(muts => {
+  /**
+   * 整理 #secondary 内元素顺序：分段(顶) → 合辑(中) → 评论(底)
+   */
+  function arrangeSecondaryOrder() {
+    const secondary = document.querySelector('ytd-watch-flexy #secondary');
+    if (!secondary) return;
+    const inner = secondary.querySelector('#secondary-inner') || secondary;
+
+    // 收集各面板
+    const chapters = inner.querySelector('[data-panel-type="chapters"]');
+    const playlist = inner.querySelector('ytd-playlist-panel-renderer, [data-panel-type="playlist"]');
+    const comments = inner.querySelector('#comments.ytd-comments-moved');
+
+    // 按顺序重新插入：分段 → 合辑 → 评论（prepend 反向插入）
+    // 先确保评论在最后
+    if (comments) inner.appendChild(comments);
+    // 合辑在评论前
+    if (playlist && comments) inner.insertBefore(playlist, comments);
+    else if (playlist) inner.appendChild(playlist);
+    // 分段在最前
+    if (chapters) inner.prepend(chapters);
+  }
+
+  /**
+   * 统一处理所有面板并排序
+   */
+  function handleAllPanels() {
+    handleChaptersPanel();
+    handlePlaylistPanel();
+    arrangeSecondaryOrder();
+  }
+
+  /**
+   * 监听面板变化（章节展开/关闭、合辑出现）
+   */
+  function setupPanelsWatcher() {
+    if (panelsObserver) panelsObserver.disconnect();
+    handleAllPanels();
+    panelsObserver = new MutationObserver(muts => {
+      let needsUpdate = false;
       for (const m of muts) {
-        if (m.type === 'attributes' && m.attributeName === 'visibility' &&
-            m.target.tagName === 'YTD-ENGAGEMENT-PANEL-SECTION-LIST-RENDERER' &&
-            (m.target.getAttribute('target-id') || '').includes('macro-markers')) {
-          moveChaptersPanel(); return;
+        if (m.type === 'attributes' && m.attributeName === 'visibility') {
+          if (m.target.tagName === 'YTD-ENGAGEMENT-PANEL-SECTION-LIST-RENDERER') {
+            needsUpdate = true; break;
+          }
         }
         if (m.type === 'childList') {
           for (const n of m.addedNodes) {
-            if (n.nodeType === 1 && (n.tagName === 'YTD-ENGAGEMENT-PANEL-SECTION-LIST-RENDERER' ||
-                n.querySelector?.('ytd-engagement-panel-section-list-renderer[target-id*="macro-markers"]'))) {
-              setTimeout(moveChaptersPanel, 200); return;
+            if (n.nodeType === 1 && (
+              n.tagName === 'YTD-ENGAGEMENT-PANEL-SECTION-LIST-RENDERER' ||
+              n.tagName === 'YTD-PLAYLIST-PANEL-RENDERER' ||
+              n.querySelector?.('ytd-engagement-panel-section-list-renderer') ||
+              n.querySelector?.('ytd-playlist-panel-renderer')
+            )) {
+              needsUpdate = true; break;
             }
           }
+          if (needsUpdate) break;
         }
       }
+      if (needsUpdate) setTimeout(handleAllPanels, 200);
     });
     const wf = document.querySelector('ytd-watch-flexy');
-    if (wf) chaptersObserver.observe(wf, {
+    if (wf) panelsObserver.observe(wf, {
       childList: true, subtree: true, attributes: true, attributeFilter: ['visibility']
     });
   }
@@ -356,11 +471,12 @@
         console.log(`${LOG} 📺 检测到视频页: ${url}`);
         moved = false;
         returnCommentsToOriginal();
-        // 清理章节面板
-        if (chaptersObserver) { chaptersObserver.disconnect(); chaptersObserver = null; }
-        document.querySelectorAll('.ytd-chapters-panel-moved').forEach(el =>
-          el.classList.remove('ytd-chapters-panel-moved')
-        );
+        // 清理面板状态
+        if (panelsObserver) { panelsObserver.disconnect(); panelsObserver = null; }
+        document.querySelectorAll('.ytd-panel-inline').forEach(el => {
+          el.classList.remove('ytd-panel-inline');
+          delete el.dataset.panelType;
+        });
         // 安排多次 nudge 确保评论加载
         setTimeout(nudgeComments, 300);
         setTimeout(nudgeComments, 1000);
@@ -376,7 +492,7 @@
               c.classList.add('ytd-comments-moved');
               const sec = document.querySelector('ytd-watch-flexy #secondary');
               const inner = sec?.querySelector('#secondary-inner') || sec;
-              if (inner) { inner.prepend(c); moved = true; setupChaptersPanelWatcher(); }
+              if (inner) { inner.appendChild(c); moved = true; setupPanelsWatcher(); }
             }
           }
         }, 10000);
