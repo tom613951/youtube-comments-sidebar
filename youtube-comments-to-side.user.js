@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube 评论移至右侧
 // @namespace    https://github.com/tampermonkey-scripts
-// @version      2.0
+// @version      2.1
 // @description  将 YouTube 评论区从视频下方移动到右侧推荐视频区域，隐藏推荐视频，章节面板内嵌显示
 // @author       Antigravity
 // @match        https://www.youtube.com/*
@@ -495,22 +495,48 @@
 
   let lastUrl = '';
 
+  /**
+   * 清理所有被内嵌的面板，移回原始位置
+   */
+  function cleanupAllPanels() {
+    isModifying = true;
+
+    // 停止面板监听
+    if (panelsObserver) { panelsObserver.disconnect(); panelsObserver = null; }
+
+    const panelsContainer = document.querySelector('ytd-watch-flexy #panels');
+
+    // 移回所有被内嵌的 engagement panel（章节/合辑）
+    document.querySelectorAll('ytd-engagement-panel-section-list-renderer.ytd-panel-inline').forEach(el => {
+      el.classList.remove('ytd-panel-inline');
+      delete el.dataset.panelType;
+      if (panelsContainer) panelsContainer.appendChild(el);
+    });
+
+    // 处理 ytd-playlist-panel-renderer（合辑）
+    document.querySelectorAll('ytd-playlist-panel-renderer.ytd-panel-inline').forEach(el => {
+      el.classList.remove('ytd-panel-inline');
+      delete el.dataset.panelType;
+      // playlist-panel-renderer 本来就在 #secondary 中，不需要移动，只需移除 class
+    });
+
+    isModifying = false;
+  }
+
   function onDomChange() {
     const url = location.href;
 
     // URL 变化 = 新页面
     if (url !== lastUrl) {
       lastUrl = url;
+
+      // 每次导航都清理上一页的面板状态
+      moved = false;
+      returnCommentsToOriginal();
+      cleanupAllPanels();
+
       if (isWatchPage()) {
         console.log(`${LOG} 📺 检测到视频页: ${url}`);
-        moved = false;
-        returnCommentsToOriginal();
-        // 清理面板状态
-        if (panelsObserver) { panelsObserver.disconnect(); panelsObserver = null; }
-        document.querySelectorAll('.ytd-panel-inline').forEach(el => {
-          el.classList.remove('ytd-panel-inline');
-          delete el.dataset.panelType;
-        });
         // 安排多次 nudge 确保评论加载
         setTimeout(nudgeComments, 300);
         setTimeout(nudgeComments, 1000);
