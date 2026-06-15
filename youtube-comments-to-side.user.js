@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube 评论移至右侧
 // @namespace    https://github.com/tampermonkey-scripts
-// @version      2.2
+// @version      2.3
 // @description  将 YouTube 评论区从视频下方移动到右侧推荐视频区域，隐藏推荐视频，章节面板内嵌显示
 // @author       Antigravity
 // @match        https://www.youtube.com/*
@@ -366,6 +366,9 @@
    * 检查合辑面板是否有有效内容（避免空面板显示 NaN/NaN）
    */
   function hasValidPlaylistContent(el) {
+    // URL 必须包含 list= 参数，否则绝不是合辑
+    if (!location.search.includes('list=')) return false;
+
     // 必须有实际的播放列表条目
     const items = el.querySelector('#items ytd-playlist-panel-video-renderer');
     if (!items) return false;
@@ -384,11 +387,21 @@
     const inner = secondary.querySelector('#secondary-inner') || secondary;
 
     // 合辑面板可能在 #secondary 中，也可能作为 engagement-panel 出现
-    const playlistPanel = inner.querySelector('ytd-playlist-panel-renderer:not(.ytd-panel-inline)');
-    if (playlistPanel && hasValidPlaylistContent(playlistPanel)) {
-      playlistPanel.classList.add('ytd-panel-inline');
-      playlistPanel.dataset.panelType = 'playlist';
-      console.log(`${LOG} ✅ 合辑面板已内嵌`);
+    const playlistPanel = inner.querySelector('ytd-playlist-panel-renderer');
+    if (playlistPanel) {
+      if (hasValidPlaylistContent(playlistPanel)) {
+        if (!playlistPanel.classList.contains('ytd-panel-inline')) {
+          playlistPanel.classList.add('ytd-panel-inline');
+          playlistPanel.dataset.panelType = 'playlist';
+          console.log(`${LOG} ✅ 合辑面板已内嵌`);
+        }
+      } else {
+        if (playlistPanel.classList.contains('ytd-panel-inline')) {
+          playlistPanel.classList.remove('ytd-panel-inline');
+          delete playlistPanel.dataset.panelType;
+          console.log(`${LOG} ↩️ 合辑面板无效，已隐藏`);
+        }
+      }
     }
 
     // 也检查 engagement panel 形式的合辑
@@ -478,6 +491,11 @@
           }
         }
         if (m.type === 'childList') {
+          // 如果修改发生在已有的合辑面板或章节面板内部，也需要更新校验
+          const targetEl = m.target.nodeType === 1 ? m.target : m.target.parentElement;
+          if (targetEl && (targetEl.closest('ytd-playlist-panel-renderer') || targetEl.closest('ytd-engagement-panel-section-list-renderer'))) {
+            needsUpdate = true; break;
+          }
           for (const n of m.addedNodes) {
             if (n.nodeType === 1 && (
               n.tagName === 'YTD-ENGAGEMENT-PANEL-SECTION-LIST-RENDERER' ||
