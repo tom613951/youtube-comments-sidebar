@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube 评论移至右侧
 // @namespace    https://github.com/tampermonkey-scripts
-// @version      2.1
+// @version      2.2
 // @description  将 YouTube 评论区从视频下方移动到右侧推荐视频区域，隐藏推荐视频，章节面板内嵌显示
 // @author       Antigravity
 // @match        https://www.youtube.com/*
@@ -200,6 +200,16 @@
     /* 合辑面板标题固定 */
     ytd-watch-flexy #secondary ytd-playlist-panel-renderer.ytd-panel-inline #header-description.ytd-playlist-panel-renderer {
       position: sticky; top: 0; z-index: 10;
+    }
+
+    /*
+     * 关键：隐藏未经验证的合辑面板
+     * YouTube 会复用 ytd-playlist-panel-renderer，导航到无合辑视频时
+     * 该元素可能残留旧数据显示 NaN/NaN。
+     * 只有我们验证过内容并添加 .ytd-panel-inline 的才显示。
+     */
+    ytd-watch-flexy #secondary ytd-playlist-panel-renderer:not(.ytd-panel-inline) {
+      display: none !important;
     }
 
     ytd-miniplayer #comments { display: none !important; }
