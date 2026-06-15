@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube 评论移至右侧
 // @namespace    https://github.com/tampermonkey-scripts
-// @version      1.9
+// @version      2.0
 // @description  将 YouTube 评论区从视频下方移动到右侧推荐视频区域，隐藏推荐视频，章节面板内嵌显示
 // @author       Antigravity
 // @match        https://www.youtube.com/*
@@ -208,6 +208,7 @@
   // ========== 核心状态 ==========
   let moved = false;
   let panelsObserver = null;
+  let isModifying = false; // 防止 DOM 修改触发 observer 死循环
 
   // ========== 工具函数 ==========
 
@@ -352,6 +353,19 @@
   }
 
   /**
+   * 检查合辑面板是否有有效内容（避免空面板显示 NaN/NaN）
+   */
+  function hasValidPlaylistContent(el) {
+    // 必须有实际的播放列表条目
+    const items = el.querySelector('#items ytd-playlist-panel-video-renderer');
+    if (!items) return false;
+    // 检查标题是否有效
+    const title = el.querySelector('#header-description .title');
+    if (title && title.textContent.includes('NaN')) return false;
+    return true;
+  }
+
+  /**
    * 处理合辑面板（Playlist）
    */
   function handlePlaylistPanel() {
@@ -361,7 +375,7 @@
 
     // 合辑面板可能在 #secondary 中，也可能作为 engagement-panel 出现
     const playlistPanel = inner.querySelector('ytd-playlist-panel-renderer:not(.ytd-panel-inline)');
-    if (playlistPanel) {
+    if (playlistPanel && hasValidPlaylistContent(playlistPanel)) {
       playlistPanel.classList.add('ytd-panel-inline');
       playlistPanel.dataset.panelType = 'playlist';
       console.log(`${LOG} ✅ 合辑面板已内嵌`);
@@ -389,33 +403,50 @@
 
   /**
    * 整理 #secondary 内元素顺序：分段(顶) → 合辑(中) → 评论(底)
+   * 只在顺序不正确时才修改 DOM，避免无意义的 DOM 操作触发 observer
    */
   function arrangeSecondaryOrder() {
     const secondary = document.querySelector('ytd-watch-flexy #secondary');
     if (!secondary) return;
     const inner = secondary.querySelector('#secondary-inner') || secondary;
 
-    // 收集各面板
     const chapters = inner.querySelector('[data-panel-type="chapters"]');
-    const playlist = inner.querySelector('ytd-playlist-panel-renderer, [data-panel-type="playlist"]');
+    const playlist = inner.querySelector('ytd-playlist-panel-renderer.ytd-panel-inline, [data-panel-type="playlist"]');
     const comments = inner.querySelector('#comments.ytd-comments-moved');
 
-    // 按顺序重新插入：分段 → 合辑 → 评论（prepend 反向插入）
-    // 先确保评论在最后
+    // 构建期望顺序
+    const desired = [chapters, playlist, comments].filter(Boolean);
+    if (desired.length < 2) return; // 只有一个或没有元素，无需排序
+
+    // 检查当前顺序是否已经正确
+    const children = Array.from(inner.children);
+    let lastIndex = -1;
+    let orderCorrect = true;
+    for (const el of desired) {
+      const idx = children.indexOf(el);
+      if (idx <= lastIndex) { orderCorrect = false; break; }
+      lastIndex = idx;
+    }
+    if (orderCorrect) return;
+
+    // 顺序不正确，重新排列
+    isModifying = true;
     if (comments) inner.appendChild(comments);
-    // 合辑在评论前
     if (playlist && comments) inner.insertBefore(playlist, comments);
     else if (playlist) inner.appendChild(playlist);
-    // 分段在最前
     if (chapters) inner.prepend(chapters);
+    isModifying = false;
+    console.log(`${LOG} 📐 面板顺序已整理`);
   }
 
   /**
    * 统一处理所有面板并排序
    */
   function handleAllPanels() {
+    isModifying = true;
     handleChaptersPanel();
     handlePlaylistPanel();
+    isModifying = false;
     arrangeSecondaryOrder();
   }
 
@@ -426,6 +457,9 @@
     if (panelsObserver) panelsObserver.disconnect();
     handleAllPanels();
     panelsObserver = new MutationObserver(muts => {
+      // 如果是我们自己在修改 DOM，跳过
+      if (isModifying) return;
+
       let needsUpdate = false;
       for (const m of muts) {
         if (m.type === 'attributes' && m.attributeName === 'visibility') {
@@ -509,6 +543,7 @@
   // 使用防抖的 MutationObserver，避免高频触发
   let debounceTimer = null;
   const globalObserver = new MutationObserver(() => {
+    if (isModifying) return; // 跳过自身 DOM 修改
     if (debounceTimer) return;
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
