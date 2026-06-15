@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube 评论移至右侧
 // @namespace    https://github.com/tampermonkey-scripts
-// @version      1.4
+// @version      1.5
 // @description  将 YouTube 评论区从视频下方移动到右侧推荐视频区域，隐藏推荐视频，章节面板内嵌显示
 // @author       Antigravity
 // @match        https://www.youtube.com/*
@@ -24,13 +24,17 @@
     /* --- 评论区在右侧的样式 --- */
     #secondary #comments.ytd-comments-moved {
       display: block !important;
+      visibility: visible !important;
+      opacity: 1 !important;
+      position: sticky !important;
+      top: 72px;
       max-height: calc(100vh - 120px);
       overflow-y: auto;
       overflow-x: hidden;
       padding: 0 8px 16px 8px;
       box-sizing: border-box;
-      position: sticky;
-      top: 72px;
+      pointer-events: auto !important;
+      z-index: auto !important;
     }
 
     /* 让右侧栏保持可见 */
@@ -54,9 +58,20 @@
       background-color: rgba(128, 128, 128, 0.7);
     }
 
-    /* 隐藏原位置的评论区占位 (防止残留空白) */
+    /*
+     * 关键修复：不使用 display:none 隐藏原位置评论区！
+     * display:none 会导致 YouTube 内部 IntersectionObserver 无法检测到评论区，
+     * 从而不会触发评论数据的 API 请求。
+     * 改用 opacity:0 + pointer-events:none，保持元素在布局中可被观察。
+     */
     #below > #comments:not(.ytd-comments-moved) {
-      display: none !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+      z-index: -1 !important;
+      max-height: 1px !important;
+      overflow: hidden !important;
+      margin: 0 !important;
+      padding: 0 !important;
     }
 
     /* 评论区标题栏微调 */
@@ -191,57 +206,34 @@
   let moved = false;
   let chaptersObserver = null;
   let pendingMoveTimer = null;
-  let commentsWatcherActive = false;
 
   const LOG_PREFIX = '[YouTube 评论移至右侧]';
 
   /**
-   * 触发 YouTube 评论区的懒加载
-   * YouTube 使用 IntersectionObserver 来检测评论区是否进入视口
-   * 我们需要模拟这个过程，让 YouTube 认为用户已经滚动到评论区
+   * 检查评论区是否已经接收到数据（YouTube 内部数据绑定完成）
+   * YouTube 会在评论区可见时通过 API 获取评论数据，
+   * 数据到达后会在 #comments 内部创建子组件。
    */
-  function triggerCommentsLoad() {
-    const comments = document.querySelector('#comments ytd-comments-header-renderer, #comments #header');
-    if (comments) {
-      // 评论头部已存在，可能已经加载了
-      return;
-    }
-
-    // 方法1: 短暂滚动到评论区位置再滚回来，触发 YouTube 的 IntersectionObserver
-    const commentsEl = document.querySelector('#comments');
-    if (commentsEl && !commentsEl.classList.contains('ytd-comments-moved')) {
-      const savedScrollY = window.scrollY;
-      // 滚动到评论区附近
-      commentsEl.scrollIntoView({ behavior: 'instant', block: 'start' });
-
-      // 短暂延迟后滚回原位
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          window.scrollTo({ top: savedScrollY, behavior: 'instant' });
-        });
-      });
-      console.log(`${LOG_PREFIX} 🔄 已触发评论区懒加载`);
-    }
-
-    // 方法2: 直接触发 ytd-comments 的 entries 回调（更可靠的后备方案）
-    const ytdComments = document.querySelector('ytd-comments#comments');
-    if (ytdComments) {
-      // 尝试通过 Polymer 的属性触发加载
-      if (typeof ytdComments.loadComments === 'function') {
-        ytdComments.loadComments();
-      }
-      // 发送自定义滚动事件让 YouTube 检测可见性
-      window.dispatchEvent(new Event('scroll'));
-    }
+  function hasCommentsData(commentsEl) {
+    // 检查是否有评论头部渲染器（表示数据已绑定）
+    if (commentsEl.querySelector('ytd-comments-header-renderer')) return true;
+    // 检查是否有评论条目（表示评论已加载）
+    if (commentsEl.querySelector('ytd-comment-thread-renderer')) return true;
+    // 检查是否有 item-section-renderer（表示框架已就绪）
+    if (commentsEl.querySelector('ytd-item-section-renderer #contents')) return true;
+    return false;
   }
 
   /**
    * 将评论区移动到右侧栏
+   * @param {boolean} forceMove - 是否强制移动（不等待数据加载）
    */
-  function moveComments() {
+  function moveComments(forceMove = false) {
     if (location.pathname !== '/watch') return false;
 
-    const comments = document.querySelector('#primary #comments, #below #comments');
+    const comments = document.querySelector(
+      '#primary #comments, #below #comments, ytd-watch-flexy #comments:not(.ytd-comments-moved)'
+    );
     const secondary = document.querySelector('#secondary, #secondary-inner');
 
     if (!comments || !secondary) return false;
@@ -249,14 +241,17 @@
     // 已经移动过了
     if (comments.classList.contains('ytd-comments-moved')) return true;
 
+    // 除非强制移动，否则等待评论数据绑定完成再移动
+    // 这样可以确保 YouTube 的内部数据流不被中断
+    if (!forceMove && !hasCommentsData(comments)) {
+      return false;
+    }
+
     // 确保 #related 被隐藏 (CSS 已处理，这里做双重保险)
     const related = secondary.querySelector('#related');
     if (related) {
       related.style.display = 'none';
     }
-
-    // 先触发懒加载（在移动前，因为移动后原始位置就没了）
-    triggerCommentsLoad();
 
     // 将评论区移动到右侧栏的最前面
     comments.classList.add('ytd-comments-moved');
@@ -265,13 +260,10 @@
     console.log(`${LOG_PREFIX} ✅ 评论区已移动到右侧`);
     moved = true;
 
-    // 移动完成后再次触发懒加载（确保评论内容在新位置也能加载）
-    setTimeout(() => {
-      triggerCommentsLoad();
-      // 确保评论在新位置的可见性被 YouTube 检测到
-      window.dispatchEvent(new Event('scroll'));
+    // 移动完成后通知浏览器布局变化，确保后续的懒加载评论也能正常触发
+    requestAnimationFrame(() => {
       window.dispatchEvent(new Event('resize'));
-    }, 300);
+    });
 
     // 评论移动完成后，开始监听章节面板
     setupChaptersPanelWatcher();
@@ -286,7 +278,6 @@
     const secondary = document.querySelector('#secondary, #secondary-inner');
     if (!secondary) return;
 
-    // 查找所有章节相关的 engagement panel
     const chapterPanels = document.querySelectorAll(
       'ytd-engagement-panel-section-list-renderer[target-id*="macro-markers"]'
     );
@@ -296,12 +287,10 @@
       const alreadyMoved = panel.classList.contains('ytd-chapters-panel-moved');
 
       if (isExpanded && !alreadyMoved) {
-        // 移动到 #secondary 顶部（评论区之前）
         panel.classList.add('ytd-chapters-panel-moved');
         secondary.prepend(panel);
         console.log(`${LOG_PREFIX} ✅ 章节面板已移至评论区顶部`);
       } else if (!isExpanded && alreadyMoved) {
-        // 面板被关闭，移回原位并清理标记
         panel.classList.remove('ytd-chapters-panel-moved');
         const panelsContainer = document.querySelector('#panels.ytd-watch-flexy, ytd-watch-flexy #panels');
         if (panelsContainer) {
@@ -316,18 +305,14 @@
    * 监听章节面板的展开/关闭
    */
   function setupChaptersPanelWatcher() {
-    // 避免重复监听
     if (chaptersObserver) {
       chaptersObserver.disconnect();
     }
 
-    // 先尝试立即处理已存在的面板
     moveChaptersPanel();
 
-    // 监听 DOM 变化，捕捉章节面板展开/关闭
     chaptersObserver = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
-        // 属性变化：检测 visibility 属性切换
         if (mutation.type === 'attributes' && mutation.attributeName === 'visibility') {
           const target = mutation.target;
           if (target.tagName === 'YTD-ENGAGEMENT-PANEL-SECTION-LIST-RENDERER' &&
@@ -336,7 +321,6 @@
             return;
           }
         }
-        // 子节点变化：可能新增了面板
         if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
           for (const node of mutation.addedNodes) {
             if (node.nodeType === 1 && (
@@ -351,7 +335,6 @@
       }
     });
 
-    // 监听整个 watch 容器
     const watchFlexy = document.querySelector('ytd-watch-flexy');
     if (watchFlexy) {
       chaptersObserver.observe(watchFlexy, {
@@ -364,85 +347,71 @@
   }
 
   /**
-   * 清理当前页面状态，为新页面做准备
+   * 清理当前页面状态
    */
   function resetState() {
     moved = false;
 
-    // 取消待执行的定时器
     if (pendingMoveTimer) {
       clearTimeout(pendingMoveTimer);
       pendingMoveTimer = null;
     }
 
-    // 清理章节面板监听器
     if (chaptersObserver) {
       chaptersObserver.disconnect();
       chaptersObserver = null;
     }
 
-    // 清理之前移动的章节面板标记
     document.querySelectorAll('.ytd-chapters-panel-moved').forEach(el => {
       el.classList.remove('ytd-chapters-panel-moved');
     });
   }
 
   /**
-   * 核心调度：尝试移动评论区，带递增延迟重试
-   * 使用递增延迟策略，前期快速重试，后期放慢节奏
+   * 核心调度：持续监听 DOM 变化，等待评论数据加载后再移动
+   *
+   * 策略说明：
+   * 1. CSS 将原位置的 #comments 设为 opacity:0（而非 display:none），
+   *    这样 YouTube 的 IntersectionObserver 仍能检测到它并触发评论 API 请求。
+   * 2. 本函数通过 MutationObserver 监听 #comments 内部变化，
+   *    一旦检测到评论数据已加载（子组件出现），立即执行移动。
+   * 3. 同时设置一个 15 秒的兜底定时器，即使没检测到数据也强制移动。
    */
-  function scheduleMove() {
+  function startWatchingForComments() {
     if (moved || location.pathname !== '/watch') return;
 
-    // 尝试立即执行
+    // 先尝试立即执行（可能评论已经加载好了，比如页面刷新的情况）
     if (moveComments()) return;
 
-    // 重试计划: 200ms, 500ms, 1s, 2s, 3s, 5s, 8s, 12s, 18s, 25s
-    const delays = [200, 500, 1000, 2000, 3000, 5000, 8000, 12000, 18000, 25000];
-    let attempt = 0;
+    console.log(`${LOG_PREFIX} ⏳ 等待评论数据加载...`);
 
-    function tryMove() {
-      if (moved || location.pathname !== '/watch') return;
-
-      if (moveComments()) {
-        console.log(`${LOG_PREFIX} ✅ 第 ${attempt + 1} 次重试成功`);
+    // MutationObserver: 监听 #comments 内部出现子组件
+    const commentsObserver = new MutationObserver(() => {
+      if (moved) {
+        commentsObserver.disconnect();
         return;
       }
-
-      attempt++;
-      if (attempt < delays.length) {
-        pendingMoveTimer = setTimeout(tryMove, delays[attempt]);
-      } else {
-        console.log(`${LOG_PREFIX} ⚠️ 所有重试已用完，未能找到评论区元素`);
-      }
-    }
-
-    pendingMoveTimer = setTimeout(tryMove, delays[0]);
-  }
-
-  /**
-   * 持久 DOM 监听器：监测 #comments 元素出现在 DOM 中
-   * 这是最可靠的方案 —— 不依赖定时器，而是在元素实际出现时立即响应
-   */
-  function setupPersistentWatcher() {
-    if (commentsWatcherActive) return;
-    commentsWatcherActive = true;
-
-    const bodyObserver = new MutationObserver(() => {
-      if (location.pathname !== '/watch') return;
-      if (moved) return;
-
-      // 检查评论区是否已出现
-      const comments = document.querySelector('#primary #comments, #below #comments');
-      if (comments && !comments.classList.contains('ytd-comments-moved')) {
-        moveComments();
+      if (moveComments()) {
+        commentsObserver.disconnect();
+        console.log(`${LOG_PREFIX} ✅ 通过 DOM 监听检测到评论数据，已移动`);
       }
     });
 
-    bodyObserver.observe(document.body, {
+    // 监听整个 primary 区域（因为 #comments 本身可能还没出现）
+    const watchTarget = document.querySelector('ytd-watch-flexy') || document.body;
+    commentsObserver.observe(watchTarget, {
       childList: true,
       subtree: true,
     });
+
+    // 兜底：15 秒后如果还没移动成功，强制移动（即使评论还没加载也先占位）
+    pendingMoveTimer = setTimeout(() => {
+      if (!moved && location.pathname === '/watch') {
+        commentsObserver.disconnect();
+        console.log(`${LOG_PREFIX} ⏰ 超时兜底，强制移动评论区`);
+        moveComments(true); // 强制移动
+      }
+    }, 15000);
   }
 
   /**
@@ -452,33 +421,30 @@
     resetState();
 
     if (location.pathname === '/watch') {
-      console.log(`${LOG_PREFIX} 📺 检测到视频页面，准备移动评论区...`);
-      // 双管齐下：定时重试 + DOM 监听
-      scheduleMove();
+      console.log(`${LOG_PREFIX} 📺 检测到视频页面`);
+      startWatchingForComments();
     }
   }
 
   // ========== 初始化 ==========
 
-  // 1. 设置持久 DOM 监听器（始终运行，不随导航重置）
-  setupPersistentWatcher();
-
-  // 2. 监听 YouTube SPA 导航事件（最主要的导航检测方式）
+  // 1. 监听 YouTube SPA 导航事件
   document.addEventListener('yt-navigate-finish', handleNavigation);
 
-  // 3. 监听 yt-page-data-updated 事件（某些情况下比 yt-navigate-finish 更晚触发）
+  // 2. 监听 yt-page-data-updated 事件（部分场景比 yt-navigate-finish 晚触发）
   document.addEventListener('yt-page-data-updated', () => {
     if (location.pathname === '/watch' && !moved) {
-      setTimeout(scheduleMove, 300);
+      // 数据更新后短暂等待 DOM 渲染
+      setTimeout(() => moveComments(), 200);
     }
   });
 
-  // 4. popstate 事件（浏览器前进/后退按钮）
+  // 3. popstate 事件（浏览器前进/后退按钮）
   window.addEventListener('popstate', () => {
     setTimeout(handleNavigation, 300);
   });
 
-  // 5. 首次加载
+  // 4. 首次加载
   if (location.pathname === '/watch') {
     handleNavigation();
   }
