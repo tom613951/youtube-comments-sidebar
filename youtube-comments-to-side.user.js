@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube 评论移至右侧
 // @namespace    https://github.com/tampermonkey-scripts
-// @version      2.3
+// @version      2.4
 // @description  将 YouTube 评论区从视频下方移动到右侧推荐视频区域，隐藏推荐视频，章节面板内嵌显示
 // @author       Antigravity
 // @match        https://www.youtube.com/*
@@ -218,6 +218,7 @@
   // ========== 核心状态 ==========
   let moved = false;
   let panelsObserver = null;
+  let resizeObserver = null; // 用于监听简介展开/收起
   let isModifying = false; // 防止 DOM 修改触发 observer 死循环
 
   // ========== 工具函数 ==========
@@ -264,6 +265,54 @@
 
   // ========== 评论区移动 ==========
 
+  // ========== 评论区高度动态适配 ==========
+
+  /**
+   * 动态计算并更新评论区的高度，使其与展开后的视频简介底部保持一致
+   */
+  function adjustCommentsHeight() {
+    const comments = document.querySelector('#comments.ytd-comments-moved');
+    if (!comments) return;
+
+    const desc = document.querySelector('ytd-watch-metadata #description, #primary #description, ytd-expandable-metadata-renderer');
+    const anchor = document.querySelector('#comments-anchor');
+    if (!desc || !anchor) {
+      comments.style.maxHeight = '';
+      return;
+    }
+
+    const descRect = desc.getBoundingClientRect();
+    const anchorRect = anchor.getBoundingClientRect();
+
+    // 计算从 anchor 到简介底部的垂直距离
+    const availableHeight = descRect.bottom - anchorRect.top;
+    const viewportLimit = window.innerHeight - 120; // 对应 CSS 中 calc(100vh - 120px)
+
+    // 取两者的最大值，确保简介收起或无内容时，评论区高度不小于视口限制高度
+    const targetMaxHeight = Math.max(viewportLimit, availableHeight);
+    comments.style.maxHeight = targetMaxHeight + 'px';
+  }
+
+  /**
+   * 监听简介区域的高度变化（展开/收回）
+   */
+  function setupResizeObserver() {
+    if (resizeObserver) {
+      resizeObserver.disconnect();
+      resizeObserver = null;
+    }
+
+    const desc = document.querySelector('ytd-watch-metadata #description, #primary #description, ytd-expandable-metadata-renderer');
+    if (desc) {
+      resizeObserver = new ResizeObserver(() => {
+        requestAnimationFrame(adjustCommentsHeight);
+      });
+      resizeObserver.observe(desc);
+    }
+  }
+
+  // ========== 评论区移动 ==========
+
   /**
    * 将 #comments 移回原位（SPA 导航时调用）
    */
@@ -271,8 +320,15 @@
     const c = document.querySelector('#comments.ytd-comments-moved');
     if (c) {
       c.classList.remove('ytd-comments-moved');
+      c.style.maxHeight = ''; // 清除动态高度
       const below = document.querySelector('ytd-watch-flexy #below');
       if (below) below.appendChild(c);
+    }
+    const anchor = document.querySelector('#comments-anchor');
+    if (anchor) anchor.remove();
+    if (resizeObserver) {
+      resizeObserver.disconnect();
+      resizeObserver = null;
     }
   }
 
@@ -300,6 +356,14 @@
     // 移动评论到右侧栏末尾（排在面板之后）
     comments.classList.add('ytd-comments-moved');
     const inner = secondary.querySelector('#secondary-inner') || secondary;
+
+    let anchor = document.querySelector('#comments-anchor');
+    if (!anchor) {
+      anchor = document.createElement('div');
+      anchor.id = 'comments-anchor';
+      anchor.style.cssText = 'height:0;margin:0;padding:0;overflow:hidden;';
+    }
+    inner.appendChild(anchor);
     inner.appendChild(comments);
     moved = true;
 
@@ -307,6 +371,10 @@
 
     // 整理面板顺序：分段 → 合辑 → 评论
     arrangeSecondaryOrder();
+
+    // 设置简介监听和高度调整
+    setupResizeObserver();
+    adjustCommentsHeight();
 
     requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
     setupPanelsWatcher();
@@ -435,6 +503,7 @@
 
     const chapters = inner.querySelector('[data-panel-type="chapters"]');
     const playlist = inner.querySelector('ytd-playlist-panel-renderer.ytd-panel-inline, [data-panel-type="playlist"]');
+    const anchor = inner.querySelector('#comments-anchor');
     const comments = inner.querySelector('#comments.ytd-comments-moved');
 
     // 构建期望顺序
@@ -450,12 +519,27 @@
       if (idx <= lastIndex) { orderCorrect = false; break; }
       lastIndex = idx;
     }
+    // 检查 anchor 是否紧跟在 comments 之前
+    if (anchor && comments) {
+      const anchorIdx = children.indexOf(anchor);
+      const commentsIdx = children.indexOf(comments);
+      if (anchorIdx !== commentsIdx - 1) {
+        orderCorrect = false;
+      }
+    }
     if (orderCorrect) return;
 
     // 顺序不正确，重新排列
     isModifying = true;
-    if (comments) inner.appendChild(comments);
-    if (playlist && comments) inner.insertBefore(playlist, comments);
+    if (anchor && comments) {
+      inner.appendChild(anchor);
+      inner.appendChild(comments);
+    } else if (comments) {
+      inner.appendChild(comments);
+    }
+
+    const insertTarget = anchor || comments;
+    if (playlist && insertTarget) inner.insertBefore(playlist, insertTarget);
     else if (playlist) inner.appendChild(playlist);
     if (chapters) inner.prepend(chapters);
     isModifying = false;
@@ -471,6 +555,7 @@
     handlePlaylistPanel();
     isModifying = false;
     arrangeSecondaryOrder();
+    adjustCommentsHeight(); // 面板变化后重新更新评论区高度
   }
 
   /**
@@ -616,6 +701,9 @@
     }
   });
   window.addEventListener('popstate', () => setTimeout(onDomChange, 200));
+  window.addEventListener('resize', () => {
+    if (moved) adjustCommentsHeight();
+  });
 
   // 首次运行
   console.log(`${LOG} 🚀 脚本已加载`);
