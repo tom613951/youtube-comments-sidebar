@@ -1,62 +1,40 @@
-# YouTube 评论移至右侧 🎬💬
+# YouTube 评论移至右侧
 
-一个 Tampermonkey / Greasemonkey 油猴脚本，将 YouTube 评论区从视频下方移动到右侧推荐视频区域，让你在观看视频的同时轻松浏览评论。
+一个适用于 Tampermonkey / Greasemonkey 的用户脚本。将 YouTube 视频下方的评论区重排至右侧推荐视频栏区域，实现观看视频的同时浏览评论。
 
-## ✨ 功能特性
+## 功能特性
 
-| 功能 | 描述 |
-|------|------|
-| 📌 评论区右移 | 将评论区从视频下方移至右侧栏 |
-| 🚫 隐藏推荐视频 | 完全隐藏右侧推荐视频列表 |
-| 📑 章节面板内嵌 | 点击分段/章节标签后，章节面板（分段）在右侧独立内嵌显示，不再覆盖评论 |
-| 💿 合辑面板内嵌 | 视频所在的播放列表（合辑）面板同样内嵌显示，不再覆盖评论 |
-| 📐 智能面板排序 | 多个面板并存时遵循：分段（最顶） → 合辑（中间） → 评论区（最底）的规则自动排版 |
-| 🎬 影院模式支持 | 影院模式下右侧评论栏依然可见 |
-| 🌙 深色模式适配 | 自动适配 YouTube 的浅色/深色主题 |
-| 📜 独立滚动 | 各面板和评论区均支持独立滚动，带美化滚动条 |
-| 🔄 SPA 导航兼容 | 正确处理 YouTube 页面内跳转与状态重置，防止出现 NaN 等脏数据 |
+- **评论区位置重排**：将视频下方的评论组件移至右侧侧边栏。
+- **隐藏推荐视频**：隐藏右侧推荐视频信息流。
+- **章节面板内嵌**：展开视频分段或章节标签时，章节面板在右侧独立内嵌显示，不遮挡评论内容。
+- **播放列表面板内嵌**：视频所在合辑与播放列表面板在右侧内嵌显示。
+- **面板层级排版**：当分段面板、播放列表与评论区共存时，按照分段 -> 播放列表 -> 评论区的结构自适应排列。
+- **视图与主题兼容**：支持默认视图与影院模式，适配浅色与深色主题。
+- **独立滚动条**：各区域支持独立滚动控制。
+- **单页导航状态同步**：处理 YouTube 单页应用（SPA）页面跳转，重置相关布局状态。
 
-## 📸 效果预览
-
-**默认状态**：评论区替代右侧推荐视频
-
-**打开章节面板**：章节面板出现在评论区顶部，两者独立滚动互不干扰
-
-## 📦 安装方法
+## 安装步骤
 
 ### 前置要求
 
-安装以下任一浏览器扩展：
-- [Tampermonkey](https://www.tampermonkey.net/)（推荐）
+已安装以下任一脚本管理扩展：
+- [Tampermonkey](https://www.tampermonkey.net/)
 - [Greasemonkey](https://www.greasespot.net/)
 - [Violentmonkey](https://violentmonkey.github.io/)
 
-### 安装步骤
+### 安装方法
 
-1. 点击 [`youtube-comments-to-side.user.js`](./youtube-comments-to-side.user.js) 查看脚本源码
-2. 点击 **Raw** 按钮，油猴扩展会自动弹出安装提示
-3. 点击 **安装** 即可
+1. 打开 [youtube-comments-to-side.user.js](./youtube-comments-to-side.user.js)。
+2. 点击 **Raw** 按钮触发扩展安装提示。
+3. 确认并点击 **安装**。
 
-或者手动安装：
-1. 打开 Tampermonkey 管理面板 → **添加新脚本**
-2. 将 `youtube-comments-to-side.user.js` 的内容粘贴进去，替换默认模板
-3. 按 `Ctrl + S` 保存
+## 实现机制
 
-## 🛠️ 技术细节
+- 使用 MutationObserver 监听 DOM 树结构变更。
+- 监听 yt-navigate-finish 事件响应单页导航跳转。
+- 基于 CSS position: sticky 实现面板标题吸顶。
+- 监听章节与合辑面板的可见性与子节点变动，结合防抖函数动态刷新布局。
 
-- 使用 `MutationObserver` 监听 YouTube SPA 页面导航和 DOM 变化
-- 监听 `yt-navigate-finish` 事件处理页面内跳转
-- 通过 CSS `position: sticky` 实现评论区、章节与合辑标题固定
-- 章节面板与合辑面板通过监听 `visibility` 变化及内部 DOM 突变（子节点变更）来动态校验、自动排版，并支持防抖刷新
+## 开源协议
 
-## 📋 兼容性
-
-- ✅ Chrome + Tampermonkey
-- ✅ Firefox + Greasemonkey / Tampermonkey
-- ✅ Edge + Tampermonkey
-- ✅ YouTube 浅色/深色模式
-- ✅ YouTube 默认/影院模式
-
-## 📄 License
-
-MIT License
+本项目采用 [MIT](LICENSE) 协议开源。
