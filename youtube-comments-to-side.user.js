@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube 评论移至右侧
 // @namespace    https://github.com/tampermonkey-scripts
-// @version      3.0
-// @description  将 YouTube 评论区移至右侧侧边栏，完美适配分集区块（播放列表/剧集）、分段区块（章节/转写）等侧边内容，多面板智能共存防冲突
+// @version      3.1
+// @description  将 YouTube 评论区移至右侧侧边栏，完美适配浅色/深色主题，智能兼容分集区块（播放列表/剧集）、分段区块（章节/转写）等侧边内容，多面板智能共存防冲突
 // @author       Antigravity
 // @match        https://www.youtube.com/*
 // @match        https://youtube.com/*
@@ -17,7 +17,7 @@
   const LOG = '[YT-Comments-Sidebar]';
 
   // =========================================================================
-  // 1. 样式系统：所有规则覆盖 ytd-watch-flexy 与新版 ytd-watch-grid
+  // 1. 样式系统：主题精准适配 + 布局防冲突
   // =========================================================================
   GM_addStyle(`
     /* --- 隐藏右侧推荐视频（仅视频页） --- */
@@ -25,7 +25,7 @@
       display: none !important;
     }
 
-    /* --- 隐藏 YouTube 原生实验性简易侧边评论，防止与完整移动评论冲突 --- */
+    /* --- 隐藏 YouTube 原生实验性简易侧边评论，防止与移动评论冲突 --- */
     :is(ytd-watch-flexy, ytd-watch-grid) #secondary #panels ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-comments-section"] {
       display: none !important;
     }
@@ -82,8 +82,6 @@
       border-radius: 12px !important;
       overflow: hidden !important;
       box-sizing: border-box !important;
-      background-color: var(--yt-spec-raised-background, #212121) !important;
-      border: 1px solid var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.2)) !important;
     }
 
     /* 多面板并存状态下（分段 + 分集）：自动缩小至紧凑尺寸，为评论区留足空间 */
@@ -118,7 +116,6 @@
       position: sticky !important;
       top: 0 !important;
       z-index: 10 !important;
-      background-color: var(--yt-spec-raised-background, #212121) !important;
       border-radius: 12px 12px 0 0 !important;
     }
 
@@ -143,8 +140,6 @@
       border-radius: 12px !important;
       overflow: hidden !important;
       box-sizing: border-box !important;
-      background-color: var(--yt-spec-raised-background, #212121) !important;
-      border: 1px solid var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.2)) !important;
     }
 
     /* 播放列表折叠状态完美适配 */
@@ -179,13 +174,44 @@
       z-index: 10 !important;
     }
 
-    /* 隐藏未经验证/无列表视频中的残留播放列表面板 */
+    /* 隐藏非播放列表页面中残留的旧面板 */
     :is(ytd-watch-flexy, ytd-watch-grid) #secondary ytd-playlist-panel-renderer#playlist[hidden] {
       display: none !important;
     }
 
     /* =====================================================================
-       4. 移动至右侧的评论区样式及滚动优化
+       4. 主题色彩自适应（精确区分浅色与深色，彻底解决顶部黑色色块）
+       ===================================================================== */
+    /* 浅色主题（默认） */
+    :is(ytd-watch-flexy, ytd-watch-grid) #secondary #panels ytd-engagement-panel-section-list-renderer[visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"],
+    :is(ytd-watch-flexy, ytd-watch-grid) #secondary ytd-playlist-panel-renderer#playlist:not([hidden]) {
+      background-color: var(--yt-spec-raised-background, #f8f8f8) !important;
+      border: 1px solid var(--yt-spec-10-percent-layer, rgba(0, 0, 0, 0.1)) !important;
+    }
+    :is(ytd-watch-flexy, ytd-watch-grid) #secondary #panels ytd-engagement-panel-section-list-renderer[visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"] #header,
+    :is(ytd-watch-flexy, ytd-watch-grid) #secondary ytd-playlist-panel-renderer#playlist:not([hidden]) #header-description,
+    :is(ytd-watch-flexy, ytd-watch-grid) #secondary ytd-playlist-panel-renderer#playlist:not([hidden]) .header,
+    :is(ytd-watch-flexy, ytd-watch-grid) #secondary #comments.ytd-comments-moved #header.ytd-comments-header-renderer {
+      background-color: var(--yt-spec-base-background, #ffffff) !important;
+      color: var(--yt-spec-text-primary, #0f0f0f) !important;
+    }
+
+    /* 深色主题 */
+    :is(html[dark], [dark], ytd-app[dark]) :is(ytd-watch-flexy, ytd-watch-grid) #secondary #panels ytd-engagement-panel-section-list-renderer[visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"],
+    :is(html[dark], [dark], ytd-app[dark]) :is(ytd-watch-flexy, ytd-watch-grid) #secondary ytd-playlist-panel-renderer#playlist:not([hidden]) {
+      background-color: var(--yt-spec-raised-background, #212121) !important;
+      border: 1px solid var(--yt-spec-10-percent-layer, rgba(255, 255, 255, 0.1)) !important;
+    }
+    :is(html[dark], [dark], ytd-app[dark]) :is(ytd-watch-flexy, ytd-watch-grid) #secondary #panels ytd-engagement-panel-section-list-renderer[visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"] #header,
+    :is(html[dark], [dark], ytd-app[dark]) :is(ytd-watch-flexy, ytd-watch-grid) #secondary ytd-playlist-panel-renderer#playlist:not([hidden]) #header-description,
+    :is(html[dark], [dark], ytd-app[dark]) :is(ytd-watch-flexy, ytd-watch-grid) #secondary ytd-playlist-panel-renderer#playlist:not([hidden]) .header,
+    :is(html[dark], [dark], ytd-app[dark]) :is(ytd-watch-flexy, ytd-watch-grid) #secondary #comments.ytd-comments-moved #header.ytd-comments-header-renderer {
+      background-color: var(--yt-spec-base-background, #0f0f0f) !important;
+      color: var(--yt-spec-text-primary, #f1f1f1) !important;
+    }
+
+    /* =====================================================================
+       5. 移动至右侧的评论区样式及滚动优化
        ===================================================================== */
     :is(ytd-watch-flexy, ytd-watch-grid) #secondary #comments.ytd-comments-moved {
       display: block !important;
@@ -209,7 +235,6 @@
       z-index: 10;
       padding-top: 8px;
       padding-bottom: 8px;
-      background-color: var(--yt-spec-base-background, #0f0f0f);
     }
 
     /* 评论项宽度适应 */
@@ -239,20 +264,6 @@
       background-color: var(--yt-spec-text-secondary, rgba(128, 128, 128, 0.65));
     }
 
-    /* 原位置评论区占位：保留在 DOM 中但完全透明，供 YouTube 内部探测器识别 */
-    :is(ytd-watch-flexy, ytd-watch-grid) #below {
-      position: relative !important;
-    }
-    :is(ytd-watch-flexy, ytd-watch-grid) #below > #comments:not(.ytd-comments-moved) {
-      opacity: 0 !important;
-      pointer-events: none !important;
-      position: absolute !important;
-      top: 0 !important;
-      left: 0 !important;
-      width: 100% !important;
-      z-index: -1 !important;
-    }
-
     /* miniplayer 隐藏评论 */
     ytd-miniplayer #comments {
       display: none !important;
@@ -260,7 +271,7 @@
   `);
 
   // =========================================================================
-  // 5. 核心状态与观察器
+  // 6. 核心状态与观察器
   // =========================================================================
   let moved = false;
   let lastUrl = '';
@@ -306,13 +317,12 @@
   }
 
   /**
-   * 触发 YouTube 内部评论加载逻辑（无抖动）
+   * 触发 YouTube 内部评论加载接口
    */
   function triggerCommentsLoad(commentsEl) {
-    if (!commentsEl || moved) return;
+    if (!commentsEl) return;
 
     try {
-      // 优先调用 YouTube Polymer 原生方法
       if (typeof commentsEl.onVisible === 'function') {
         commentsEl.onVisible();
       }
@@ -329,24 +339,21 @@
           itemSection.onVisible();
         }
       }
-    } catch (e) {
-      // 忽略调用异常
-    }
 
-    // 备用方案：短暂将原位置评论设为微小透明度触发原生 IntersectionObserver
-    if (!hasCommentsContent(commentsEl)) {
-      const saved = commentsEl.style.cssText;
-      commentsEl.style.cssText = 'position:relative!important;opacity:0.001!important;height:200px!important;';
-      setTimeout(() => {
-        if (!moved) commentsEl.style.cssText = saved;
-      }, 500);
-    }
+      const continuation = commentsEl.querySelector('ytd-continuation-item-renderer');
+      if (continuation) {
+        if (typeof continuation.triggerContinuation === 'function') {
+          continuation.triggerContinuation();
+        }
+        if (typeof continuation.onVisible === 'function') {
+          continuation.onVisible();
+        }
+      }
+    } catch (e) {}
   }
 
   /**
    * 核心布局自适应与防冲突更新
-   * 1. 探测多面板并存状态，给 #secondary-inner 打标记
-   * 2. 动态计算评论区 max-height，保证无论何种页面滚动状态，底部始终完美贴合视口
    */
   function updateSidebarLayout() {
     if (layoutRafId) cancelAnimationFrame(layoutRafId);
@@ -384,9 +391,14 @@
       // 4. 动态计算评论区高度，保证底部完美贴合视口（距底 16px）
       const comments = inner.querySelector('#comments.ytd-comments-moved');
       if (comments) {
+        // 清理任何残留的异常内联样式
+        comments.style.removeProperty('opacity');
+        comments.style.removeProperty('height');
+        comments.style.removeProperty('position');
+
         const rect = comments.getBoundingClientRect();
         const availableHeight = window.innerHeight - rect.top - 16;
-        const minHeight = 260; // 兜底最小高度
+        const minHeight = 260;
         comments.style.maxHeight = Math.max(minHeight, availableHeight) + 'px';
       }
     });
@@ -425,22 +437,12 @@
   function moveCommentsToSidebar() {
     if (moved || !isWatchPage()) return false;
 
+    // 寻找评论区容器
     const comments = document.querySelector(
-      ':is(ytd-watch-flexy, ytd-watch-grid) #below #comments, :is(ytd-watch-flexy, ytd-watch-grid) #primary #comments'
+      ':is(ytd-watch-flexy, ytd-watch-grid) #comments, ytd-comments#comments, ytd-comments'
     );
     const secondary = document.querySelector(':is(ytd-watch-flexy, ytd-watch-grid) #secondary');
     if (!comments || !secondary) return false;
-
-    // 需等待评论组件或基础内容加载
-    if (!hasCommentsContent(comments)) {
-      triggerCommentsLoad(comments);
-      return false;
-    }
-
-    if (comments.classList.contains('ytd-comments-moved')) {
-      moved = true;
-      return true;
-    }
 
     // 确保右侧栏可见并隐藏推荐视频
     ensureSecondaryVisible();
@@ -449,16 +451,24 @@
 
     // 移动评论区至 #secondary-inner 末尾
     const inner = secondary.querySelector('#secondary-inner') || secondary;
+
+    // 彻底清除干扰的内联样式
+    comments.style.removeProperty('opacity');
+    comments.style.removeProperty('height');
+    comments.style.removeProperty('position');
     comments.classList.add('ytd-comments-moved');
     inner.appendChild(comments);
     moved = true;
 
-    console.log(`${LOG} ✅ 评论区已成功移至右侧侧边栏`);
+    console.log(`${LOG} ✅ 评论区已移至右侧侧边栏`);
+
+    // 立即触发评论数据拉取与首屏初始化
+    triggerCommentsLoad(comments);
 
     // 绑定内部无限滚动加载
     setupCommentsScrollListener(comments);
 
-    // 立即执行一次布局自适应
+    // 立即更新布局
     updateSidebarLayout();
 
     // 启动面板变动与尺寸监听
@@ -475,7 +485,12 @@
     if (comments) {
       comments.classList.remove('ytd-comments-moved');
       comments.style.maxHeight = '';
-      const below = document.querySelector(':is(ytd-watch-flexy, ytd-watch-grid) #below');
+      comments.style.removeProperty('opacity');
+      comments.style.removeProperty('height');
+      comments.style.removeProperty('position');
+      const below = document.querySelector(
+        ':is(ytd-watch-flexy, ytd-watch-grid) #primary-inner #below, :is(ytd-watch-flexy, ytd-watch-grid) #below'
+      );
       if (below) below.appendChild(comments);
     }
   }
@@ -505,7 +520,8 @@
                 tag === 'YTD-ENGAGEMENT-PANEL-SECTION-LIST-RENDERER' ||
                 tag === 'YTD-PLAYLIST-PANEL-RENDERER' ||
                 tag === 'YTD-COMMENT-THREAD-RENDERER' ||
-                node.querySelector?.('ytd-engagement-panel-section-list-renderer, ytd-playlist-panel-renderer')
+                tag === 'YTD-COMMENTS-HEADER-RENDERER' ||
+                node.querySelector?.('ytd-engagement-panel-section-list-renderer, ytd-playlist-panel-renderer, ytd-comment-thread-renderer')
               ) {
                 needsUpdate = true;
                 break;
@@ -551,29 +567,11 @@
 
       console.log(`${LOG} 📺 进入视频页: ${currentUrl}`);
 
-      // 阶段性尝试拉取评论
-      const comments = document.querySelector(
-        ':is(ytd-watch-flexy, ytd-watch-grid) #below #comments, :is(ytd-watch-flexy, ytd-watch-grid) #primary #comments'
-      );
-      if (comments) triggerCommentsLoad(comments);
-
-      setTimeout(() => {
-        if (!moved) moveCommentsToSidebar();
-      }, 300);
-      setTimeout(() => {
-        if (!moved) moveCommentsToSidebar();
-      }, 1000);
-      setTimeout(() => {
-        if (!moved) moveCommentsToSidebar();
-      }, 2500);
-
-      // 兜底强制移动
-      setTimeout(() => {
-        if (!moved && isWatchPage()) {
-          console.log(`${LOG} ⏰ 兜底移动检查`);
-          moveCommentsToSidebar();
-        }
-      }, 5000);
+      // 阶段性检测并尝试移动
+      setTimeout(moveCommentsToSidebar, 200);
+      setTimeout(moveCommentsToSidebar, 800);
+      setTimeout(moveCommentsToSidebar, 2000);
+      setTimeout(moveCommentsToSidebar, 4000);
       return;
     }
 
@@ -584,7 +582,7 @@
   }
 
   // =========================================================================
-  // 6. 全局事件监听与初始化
+  // 7. 全局事件监听与初始化
   // =========================================================================
 
   // 全局 DOM 防抖监听器
@@ -626,7 +624,7 @@
   );
 
   // 初始加载
-  console.log(`${LOG} 🚀 脚本加载完成 (v3.0)`);
+  console.log(`${LOG} 🚀 脚本加载完成 (v3.1)`);
   lastUrl = location.href;
   if (isWatchPage()) {
     onDomChange();
