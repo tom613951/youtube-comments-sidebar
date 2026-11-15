@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube 评论移至右侧
 // @namespace    https://github.com/tampermonkey-scripts
-// @version      3.3
-// @description  将 YouTube 评论区移至右侧侧边栏，完美适配浅色/深色主题，智能兼容分集区块（播放列表/剧集）、分段区块（章节/转写）等侧边内容，多面板智能共存防冲突，简介展开丝滑硬件加速动效，修复子回复无线重复加载 bug
+// @version      3.4
+// @description  将 YouTube 评论区移至右侧侧边栏，完美适配浅色/深色主题，智能兼容分集区块（播放列表/剧集）、分段区块（章节/转写）等侧边内容，多面板智能共存防冲突，简介展开丝滑硬件加速动效，高性能零冗余事件监听
 // @author       Antigravity
 // @match        https://www.youtube.com/*
 // @match        https://youtube.com/*
@@ -17,16 +17,21 @@
   const LOG = '[YT-Comments-Sidebar]';
 
   // =========================================================================
-  // 1. 样式系统：主题精准适配 + 布局防冲突 + 硬件加速动效
+  // 1. 样式系统：主题精准适配 + 布局防冲突 + 硬件加速动效 + 布局隔离
   // =========================================================================
   GM_addStyle(`
-    /* --- 隐藏右侧推荐视频（仅视频页） --- */
+    /* --- 隐藏右侧推荐视频（仅视频页生效） --- */
     :is(ytd-watch-flexy, ytd-watch-grid) #secondary #related {
       display: none !important;
     }
 
     /* --- 隐藏 YouTube 原生实验性简易侧边评论，防止与移动评论冲突 --- */
     :is(ytd-watch-flexy, ytd-watch-grid) #secondary #panels ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-comments-section"] {
+      display: none !important;
+    }
+
+    /* --- 全屏模式安全隐藏侧边栏 --- */
+    :is(ytd-watch-flexy, ytd-watch-grid)[fullscreen] #secondary {
       display: none !important;
     }
 
@@ -226,6 +231,8 @@
       pointer-events: auto !important;
       margin-top: 4px;
       flex: 1 1 auto !important;
+      /* 布局隔离（Containment）：大幅减少评论内部 DOM 变更引发的重排计算 */
+      contain: layout style;
       /* 硬件加速平滑动效：杜绝多帧重排导致的抖动与卡顿 */
       transition: max-height 0.35s cubic-bezier(0.2, 0.9, 0.3, 1) !important;
       will-change: max-height;
@@ -274,12 +281,13 @@
   `);
 
   // =========================================================================
-  // 6. 核心状态与观察器
+  // 6. 核心状态与观察器（按需启停，零空转 CPU 开销）
   // =========================================================================
   let moved = false;
   let lastUrl = '';
   let panelsObserver = null;
   let descObserver = null;
+  let globalObserver = null;
   let layoutRafId = null;
   let isTriggeringContinuation = false;
 
@@ -293,16 +301,18 @@
   function getMainCommentsContinuation(commentsEl) {
     if (!commentsEl) return null;
 
-    // 优先：通过明确结构选择顶层 contents 下的 continuation
+    // 优先：通过主列表 contents 容器直接定位顶层 continuation
     const directCont = commentsEl.querySelector(
-      ':scope > ytd-item-section-renderer#sections > #contents > ytd-continuation-item-renderer'
+      ':scope > ytd-item-section-renderer#sections > #contents > ytd-continuation-item-renderer, #sections > #contents > ytd-continuation-item-renderer'
     );
-    if (directCont) return directCont;
+    if (directCont && !directCont.closest('ytd-comment-replies-renderer, yt-sub-thread, #replies, .ytSubThreadSubThreadContent')) {
+      return directCont;
+    }
 
-    // 备选：遍历排除所有位于 replies 内部的 continuation
+    // 兜底扫描：过滤排除所有属于楼中楼回复的 continuation
     const allConts = commentsEl.querySelectorAll('ytd-continuation-item-renderer');
     for (const c of allConts) {
-      if (!c.closest('ytd-comment-replies-renderer, yt-sub-thread, #replies, .ytSubThreadSubThreadContent')) {
+      if (!c.closest('ytd-comment-replies-renderer, yt-sub-thread, #replies, .ytSubThreadSubThreadContent, ytd-comment-view-model, ytd-comment-renderer')) {
         return c;
       }
     }
@@ -413,7 +423,7 @@
         comments.style.removeProperty('height');
         comments.style.removeProperty('position');
 
-        const expander = document.querySelector('ytd-text-inline-expander');
+        const expander = document.querySelector('ytd-text-inline-expander, #description-inline-expander');
         const desc = document.querySelector('ytd-watch-metadata #description, #primary #description');
         const isDescExpanded = expander?.hasAttribute('is-expanded');
 
@@ -444,7 +454,7 @@
       descObserver = null;
     }
 
-    const expander = document.querySelector('ytd-text-inline-expander');
+    const expander = document.querySelector('ytd-text-inline-expander, #description-inline-expander');
     if (!expander) return;
 
     descObserver = new MutationObserver(mutations => {
@@ -541,6 +551,9 @@
 
     console.log(`${LOG} ✅ 评论区已移至右侧侧边栏`);
 
+    // 成功移位后暂停全局重度 DOM 观察器，将 CPU 消耗降为 0
+    pauseGlobalObserver();
+
     // 立即触发评论数据拉取与首屏初始化
     triggerCommentsLoad(comments);
 
@@ -629,6 +642,31 @@
     });
   }
 
+  // =========================================================================
+  // 7. 全局事件监听与初始化（带空闲休眠优化）
+  // =========================================================================
+
+  let debounceTimer = null;
+
+  function resumeGlobalObserver() {
+    if (globalObserver) return;
+    globalObserver = new MutationObserver(() => {
+      if (debounceTimer) return;
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        onDomChange();
+      }, 150);
+    });
+    globalObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
+  function pauseGlobalObserver() {
+    if (globalObserver) {
+      globalObserver.disconnect();
+      globalObserver = null;
+    }
+  }
+
   /**
    * 页面变动与单页路由导航响应
    */
@@ -639,6 +677,7 @@
     if (currentUrl !== lastUrl) {
       lastUrl = currentUrl;
       moved = false;
+      isTriggeringContinuation = false;
 
       if (!isWatchPage()) {
         returnCommentsToOriginal();
@@ -650,10 +689,14 @@
           descObserver.disconnect();
           descObserver = null;
         }
+        pauseGlobalObserver();
         return;
       }
 
       console.log(`${LOG} 📺 进入视频页: ${currentUrl}`);
+
+      // 进入视频页，重新启用全局观察器直至移位成功
+      resumeGlobalObserver();
 
       // 阶段性检测并尝试移动
       setTimeout(moveCommentsToSidebar, 200);
@@ -669,25 +712,10 @@
     }
   }
 
-  // =========================================================================
-  // 7. 全局事件监听与初始化
-  // =========================================================================
-
-  // 全局 DOM 防抖监听器
-  let debounceTimer = null;
-  const globalObserver = new MutationObserver(() => {
-    if (debounceTimer) return;
-    debounceTimer = setTimeout(() => {
-      debounceTimer = null;
-      onDomChange();
-    }, 150);
-  });
-  globalObserver.observe(document.body, { childList: true, subtree: true });
-
   // YouTube 专有导航事件
   document.addEventListener('yt-navigate-finish', () => onDomChange());
   document.addEventListener('yt-page-data-updated', () => {
-    if (isWatchPage()) {
+    if (isWatchPage() && !moved) {
       onDomChange();
     }
   });
@@ -704,8 +732,9 @@
   );
 
   // 初始加载
-  console.log(`${LOG} 🚀 脚本加载完成 (v3.3)`);
+  console.log(`${LOG} 🚀 脚本加载完成 (v3.4)`);
   lastUrl = location.href;
+  resumeGlobalObserver();
   if (isWatchPage()) {
     onDomChange();
   }
