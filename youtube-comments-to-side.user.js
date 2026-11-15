@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube 评论移至右侧
 // @namespace    https://github.com/tampermonkey-scripts
-// @version      3.1
-// @description  将 YouTube 评论区移至右侧侧边栏，完美适配浅色/深色主题，智能兼容分集区块（播放列表/剧集）、分段区块（章节/转写）等侧边内容，多面板智能共存防冲突
+// @version      3.2
+// @description  将 YouTube 评论区移至右侧侧边栏，完美适配浅色/深色主题，智能兼容分集区块（播放列表/剧集）、分段区块（章节/转写）等侧边内容，多面板智能共存防冲突，简介展开丝滑硬件加速动效
 // @author       Antigravity
 // @match        https://www.youtube.com/*
 // @match        https://youtube.com/*
@@ -17,7 +17,7 @@
   const LOG = '[YT-Comments-Sidebar]';
 
   // =========================================================================
-  // 1. 样式系统：主题精准适配 + 布局防冲突
+  // 1. 样式系统：主题精准适配 + 布局防冲突 + 硬件加速动效
   // =========================================================================
   GM_addStyle(`
     /* --- 隐藏右侧推荐视频（仅视频页） --- */
@@ -211,7 +211,7 @@
     }
 
     /* =====================================================================
-       5. 移动至右侧的评论区样式及滚动优化
+       5. 移动至右侧的评论区样式及硬件加速丝滑过渡
        ===================================================================== */
     :is(ytd-watch-flexy, ytd-watch-grid) #secondary #comments.ytd-comments-moved {
       display: block !important;
@@ -226,6 +226,9 @@
       pointer-events: auto !important;
       margin-top: 4px;
       flex: 1 1 auto !important;
+      /* 硬件加速平滑动效：杜绝多帧重排导致的抖动与卡顿 */
+      transition: max-height 0.35s cubic-bezier(0.2, 0.9, 0.3, 1) !important;
+      will-change: max-height;
     }
 
     /* 评论标题栏吸顶 */
@@ -276,19 +279,11 @@
   let moved = false;
   let lastUrl = '';
   let panelsObserver = null;
+  let descObserver = null;
   let layoutRafId = null;
 
   function isWatchPage() {
     return location.pathname === '/watch';
-  }
-
-  function hasCommentsContent(el) {
-    if (!el) return false;
-    return !!(
-      el.querySelector('ytd-comments-header-renderer') ||
-      el.querySelector('ytd-comment-thread-renderer') ||
-      el.querySelector('ytd-item-section-renderer #contents')
-    );
   }
 
   /**
@@ -354,6 +349,7 @@
 
   /**
    * 核心布局自适应与防冲突更新
+   * 单次计算最终高度，配合 CSS transition 产生 60fps 丝滑展开/折叠动效
    */
   function updateSidebarLayout() {
     if (layoutRafId) cancelAnimationFrame(layoutRafId);
@@ -388,20 +384,71 @@
         inner.classList.remove('has-multiple-panels');
       }
 
-      // 4. 动态计算评论区高度，保证底部完美贴合视口（距底 16px）
+      // 4. 简介展开状态感知与动态定高（单次赋值，GPU 补间）
       const comments = inner.querySelector('#comments.ytd-comments-moved');
       if (comments) {
-        // 清理任何残留的异常内联样式
         comments.style.removeProperty('opacity');
         comments.style.removeProperty('height');
         comments.style.removeProperty('position');
 
-        const rect = comments.getBoundingClientRect();
-        const availableHeight = window.innerHeight - rect.top - 16;
-        const minHeight = 260;
-        comments.style.maxHeight = Math.max(minHeight, availableHeight) + 'px';
+        const expander = document.querySelector('ytd-text-inline-expander');
+        const desc = document.querySelector('ytd-watch-metadata #description, #primary #description');
+        const isDescExpanded = expander?.hasAttribute('is-expanded');
+
+        const viewportLimit = window.innerHeight - 120;
+
+        if (isDescExpanded && desc) {
+          // 简介展开时：侧边栏精准顺滑拉长至与简介底部对齐
+          const descRect = desc.getBoundingClientRect();
+          const commentsRect = comments.getBoundingClientRect();
+          const availableToDescBottom = descRect.bottom - commentsRect.top;
+          const targetHeight = Math.max(viewportLimit, availableToDescBottom);
+          comments.style.maxHeight = Math.round(targetHeight) + 'px';
+        } else {
+          // 简介收起时：限制在视口可用高度内
+          comments.style.maxHeight = Math.round(viewportLimit) + 'px';
+        }
       }
     });
+  }
+
+  /**
+   * 监听简介区域展开/收起切换
+   * 针对 is-expanded 属性触发单次更新，杜绝逐帧 reflow 造成的卡顿
+   */
+  function setupDescriptionObserver() {
+    if (descObserver) {
+      descObserver.disconnect();
+      descObserver = null;
+    }
+
+    const expander = document.querySelector('ytd-text-inline-expander');
+    if (!expander) return;
+
+    descObserver = new MutationObserver(mutations => {
+      for (const m of mutations) {
+        if (m.type === 'attributes' && m.attributeName === 'is-expanded') {
+          updateSidebarLayout();
+          break;
+        }
+      }
+    });
+
+    descObserver.observe(expander, {
+      attributes: true,
+      attributeFilter: ['is-expanded']
+    });
+
+    // 兼听点击交互，确保即时触发动画
+    if (!expander.dataset.hasClickListener) {
+      expander.dataset.hasClickListener = 'true';
+      expander.addEventListener('click', e => {
+        const btn = e.target.closest('#expand, #collapse, tp-yt-paper-button');
+        if (btn) {
+          requestAnimationFrame(() => setTimeout(updateSidebarLayout, 20));
+        }
+      });
+    }
   }
 
   /**
@@ -468,10 +515,13 @@
     // 绑定内部无限滚动加载
     setupCommentsScrollListener(comments);
 
+    // 绑定简介展开监听器
+    setupDescriptionObserver();
+
     // 立即更新布局
     updateSidebarLayout();
 
-    // 启动面板变动与尺寸监听
+    // 启动面板变动监听
     setupPanelsWatcher();
 
     return true;
@@ -521,6 +571,7 @@
                 tag === 'YTD-PLAYLIST-PANEL-RENDERER' ||
                 tag === 'YTD-COMMENT-THREAD-RENDERER' ||
                 tag === 'YTD-COMMENTS-HEADER-RENDERER' ||
+                tag === 'YTD-TEXT-INLINE-EXPANDER' ||
                 node.querySelector?.('ytd-engagement-panel-section-list-renderer, ytd-playlist-panel-renderer, ytd-comment-thread-renderer')
               ) {
                 needsUpdate = true;
@@ -533,6 +584,7 @@
       }
 
       if (needsUpdate) {
+        setupDescriptionObserver();
         updateSidebarLayout();
       }
     });
@@ -561,6 +613,10 @@
         if (panelsObserver) {
           panelsObserver.disconnect();
           panelsObserver = null;
+        }
+        if (descObserver) {
+          descObserver.disconnect();
+          descObserver = null;
         }
         return;
       }
@@ -606,15 +662,7 @@
 
   window.addEventListener('popstate', () => setTimeout(onDomChange, 200));
 
-  // 视口尺寸与主页面滚动监听：动态刷新高度
-  window.addEventListener(
-    'scroll',
-    () => {
-      if (moved && isWatchPage()) updateSidebarLayout();
-    },
-    { passive: true }
-  );
-
+  // 仅在视口尺寸改变时重新适配，杜绝页面滚动时的重复计算
   window.addEventListener(
     'resize',
     () => {
@@ -624,7 +672,7 @@
   );
 
   // 初始加载
-  console.log(`${LOG} 🚀 脚本加载完成 (v3.1)`);
+  console.log(`${LOG} 🚀 脚本加载完成 (v3.2)`);
   lastUrl = location.href;
   if (isWatchPage()) {
     onDomChange();

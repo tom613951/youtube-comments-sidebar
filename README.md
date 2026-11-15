@@ -2,13 +2,16 @@
 
 适用于 Tampermonkey / Violentmonkey / Greasemonkey 的现代化用户脚本。将 YouTube 视频下方的评论区重排至右侧推荐视频栏区域，实现一边观看视频一边浏览与互动评论。
 
-深度重构升级至 **v3.0**，全面适配 YouTube 最新改版与网格布局，彻底解决分集区块（播放列表/剧集）、分段区块（章节/转写）与评论区的挤压与排版冲突。
+深度重构升级至 **v3.2**，全面适配 YouTube 最新改版与网格布局，彻底解决分集区块（播放列表/剧集）、分段区块（章节/转写）与评论区的挤压与排版冲突，并引入硬件加速动效，消除展开简介时的重排卡顿。
 
 ---
 
 ## ✨ 核心特性
 
 - **评论区右侧重排**：将视频下方的完整评论组件平滑移至右侧侧边栏，隐藏无关的推荐视频信息流。
+- **浅色 / 深色主题原生融入**：
+  - 精确分离明暗色彩变量体系，彻底解决浅色主题下侧边栏卡片头部出现的“黑块”问题。
+  - 完美适配 YouTube 浅色模式、深色模式与微光氛围模式（Cinematics）。
 - **全方位分段区块（Chapters）内嵌**：
   - 展开视频分段、章节列表或字幕转写文稿（Transcript）时，以独立卡片在右侧顶部优雅内嵌展示。
   - 保留 YouTube 原生 `#panels` 架构与 Polymer 事件绑定，拒绝粗暴挪动 DOM 导致的事件脱钩与循环抖动。
@@ -16,19 +19,18 @@
 - **全格式分集区块（Playlist / Episodes）适配**：
   - 完美兼容视频合辑、播放列表、播客合辑、课程分集与剧集面板（TV Shows / Episodes）。
   - 原生支持播放列表的折叠状态（`collapsed`），收起时仅占一行标题栏，展开时自适应限制高度并独立滚动。
-  - 彻底修复旧版未经验证即隐藏播放列表导致的“分集面板意外消失”问题。
 - **智能多面板共存与防冲突机制**：
   - **分段 + 分集 + 评论 三者共存**：当用户同时展开章节与播放列表时，自动触发紧凑排版模式（`has-multiple-panels`），每个面板合理压缩限高，为下方的评论区保留充足的可视空间。
-  - **视口自适应动态定高**：实时监测评论区顶部相对视口的距离（`rect.top`），动态计算并限制 `max-height`，确保无论页面滚动到何种位置，评论区底部始终精准贴合视口底端（预留 16px 呼吸间距），杜绝滚动条失效或内容被屏幕截断。
+- **硬件加速丝滑拉长动效（v3.2 优化）**：
+  - 展开/折叠视频详情（简介）时，侧边栏高度平滑延伸对齐，采用 CSS `cubic-bezier(0.2, 0.9, 0.3, 1)` 硬件加速过渡；
+  - 废弃引起 Layout Thrashing（布局抖动）的每帧 `ResizeObserver` 轮询计算，改为按状态触发单次高度分配，实现真正的 60/120fps 满帧平滑拉长。
 - **评论平滑加载与无限滚动**：
-  - 优先调用 YouTube 底层 `onVisible()` 与 `triggerInitialContinuations()` 语义加载接口，移除导致屏幕跳跃的旧版滚屏拉取。
+  - 移除导致透明度被锁死的异常探针，进入页面即刻唤醒渲染；
   - 监听右侧评论区内部滚动触底事件，无缝触发下一页评论数据懒加载。
-- **最新版布局与主题兼容**：
+- **新旧布局全兼容**：
   - 双重兼容经典 `ytd-watch-flexy` 与新一代 `ytd-watch-grid` 容器。
   - 自动屏蔽 YouTube 实验性的简易侧边评论，防止双份评论区冲突。
   - 修复影院模式（Theater Mode）下遮挡视频画面的问题，保持原生侧边排列。
-  - 采用 YouTube 语义化 CSS Token（`var(--yt-spec-...)`），完美融入浅色、深色主题及氛围光模式（Cinematics）。
-- **SPA 单页导航全生命周期同步**：精准响应 `yt-navigate-finish` 与路由跳转，切换非视频页时干净重置状态并复原组件。
 
 ---
 
@@ -58,16 +60,16 @@ flowchart TD
     B -- 否 --> C[清理观察器 / 复原评论区]
     B -- 是 --> D[ensureSecondaryVisible 确保右侧栏展开]
     D --> E[隐藏 #related 推荐视频]
-    E --> F[triggerCommentsLoad 预加载评论数据]
-    F --> G[moveCommentsToSidebar 挂载评论至 #secondary-inner]
+    E --> F[moveCommentsToSidebar 挂载评论至 #secondary-inner]
+    F --> G[triggerCommentsLoad 语义化唤醒评论数据]
     G --> H[updateSidebarLayout 动态布局仲裁]
     H --> I{是否存在展开的分段/分集面板?}
-    I -- 同时存在 --> J[激活 has-multiple-panels 紧凑限高]
-    I -- 单个或无 --> K[正常限制单卡片高度]
-    J --> L[计算视口剩余空间: window.innerHeight - rect.top - 16px]
+    I -- 同时存在 --> J[激活 has-multiple-panels 紧凑限高 28vh]
+    I -- 单个或无 --> K[正常限制单卡片高度 38vh]
+    J --> L[简介展开/收起监听: setupDescriptionObserver]
     K --> L
-    L --> M[更新评论区 maxHeight 建立独立平滑滚动]
-    M --> N[setupPanelsWatcher 持续响应折叠/展开/滚动/缩放]
+    L --> M[单次计算目标高度 + CSS 硬件加速过渡 0.35s 补间]
+    M --> N[评论区丝滑拉长/回缩，平滑无卡顿]
 ```
 
 ---
