@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube 评论移至右侧
 // @namespace    https://github.com/tampermonkey-scripts
-// @version      3.2
-// @description  将 YouTube 评论区移至右侧侧边栏，完美适配浅色/深色主题，智能兼容分集区块（播放列表/剧集）、分段区块（章节/转写）等侧边内容，多面板智能共存防冲突，简介展开丝滑硬件加速动效
+// @version      3.3
+// @description  将 YouTube 评论区移至右侧侧边栏，完美适配浅色/深色主题，智能兼容分集区块（播放列表/剧集）、分段区块（章节/转写）等侧边内容，多面板智能共存防冲突，简介展开丝滑硬件加速动效，修复子回复无线重复加载 bug
 // @author       Antigravity
 // @match        https://www.youtube.com/*
 // @match        https://youtube.com/*
@@ -281,9 +281,32 @@
   let panelsObserver = null;
   let descObserver = null;
   let layoutRafId = null;
+  let isTriggeringContinuation = false;
 
   function isWatchPage() {
     return location.pathname === '/watch';
+  }
+
+  /**
+   * 仅获取顶层主评论流末尾的 continuation，严禁匹配任何回复（replies）内部的 continuation！
+   */
+  function getMainCommentsContinuation(commentsEl) {
+    if (!commentsEl) return null;
+
+    // 优先：通过明确结构选择顶层 contents 下的 continuation
+    const directCont = commentsEl.querySelector(
+      ':scope > ytd-item-section-renderer#sections > #contents > ytd-continuation-item-renderer'
+    );
+    if (directCont) return directCont;
+
+    // 备选：遍历排除所有位于 replies 内部的 continuation
+    const allConts = commentsEl.querySelectorAll('ytd-continuation-item-renderer');
+    for (const c of allConts) {
+      if (!c.closest('ytd-comment-replies-renderer, yt-sub-thread, #replies, .ytSubThreadSubThreadContent')) {
+        return c;
+      }
+    }
+    return null;
   }
 
   /**
@@ -312,7 +335,7 @@
   }
 
   /**
-   * 触发 YouTube 内部评论加载接口
+   * 触发 YouTube 内部主评论加载接口（绝对不影响回复）
    */
   function triggerCommentsLoad(commentsEl) {
     if (!commentsEl) return;
@@ -335,12 +358,11 @@
         }
       }
 
-      const continuation = commentsEl.querySelector('ytd-continuation-item-renderer');
+      const continuation = getMainCommentsContinuation(commentsEl);
       if (continuation) {
         if (typeof continuation.triggerContinuation === 'function') {
           continuation.triggerContinuation();
-        }
-        if (typeof continuation.onVisible === 'function') {
+        } else if (typeof continuation.onVisible === 'function') {
           continuation.onVisible();
         }
       }
@@ -452,7 +474,8 @@
   }
 
   /**
-   * 监听评论区内部滚动，当滚动至底部时触发下一页加载（无限滚动）
+   * 监听评论区内部滚动：仅针对顶层主评论流末尾触发无限滚动加载
+   * 严格防止误触发任何子回复 continuation
    */
   function setupCommentsScrollListener(commentsEl) {
     if (!commentsEl || commentsEl.dataset.hasScrollListener === 'true') return;
@@ -461,16 +484,25 @@
     commentsEl.addEventListener(
       'scroll',
       () => {
+        if (isTriggeringContinuation) return;
+
         if (commentsEl.scrollTop + commentsEl.clientHeight >= commentsEl.scrollHeight - 300) {
-          const continuation = commentsEl.querySelector('ytd-continuation-item-renderer');
-          if (continuation) {
+          // 仅查询顶层主评论流的 continuation，绝对禁止查询回复组件中的 continuation
+          const mainCont = getMainCommentsContinuation(commentsEl);
+          if (mainCont) {
+            isTriggeringContinuation = true;
             try {
-              if (typeof continuation.triggerContinuation === 'function') {
-                continuation.triggerContinuation();
-              } else if (typeof continuation.onVisible === 'function') {
-                continuation.onVisible();
+              if (typeof mainCont.triggerContinuation === 'function') {
+                mainCont.triggerContinuation();
+              } else if (typeof mainCont.onVisible === 'function') {
+                mainCont.onVisible();
               }
             } catch (err) {}
+
+            // 节流锁：2秒内禁止重复触发下一页请求
+            setTimeout(() => {
+              isTriggeringContinuation = false;
+            }, 2000);
           }
         }
       },
@@ -512,7 +544,7 @@
     // 立即触发评论数据拉取与首屏初始化
     triggerCommentsLoad(comments);
 
-    // 绑定内部无限滚动加载
+    // 绑定内部无限滚动加载（带防误触主评论过滤与节流锁）
     setupCommentsScrollListener(comments);
 
     // 绑定简介展开监听器
@@ -672,7 +704,7 @@
   );
 
   // 初始加载
-  console.log(`${LOG} 🚀 脚本加载完成 (v3.2)`);
+  console.log(`${LOG} 🚀 脚本加载完成 (v3.3)`);
   lastUrl = location.href;
   if (isWatchPage()) {
     onDomChange();

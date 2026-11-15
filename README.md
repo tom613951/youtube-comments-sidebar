@@ -2,7 +2,7 @@
 
 适用于 Tampermonkey / Violentmonkey / Greasemonkey 的现代化用户脚本。将 YouTube 视频下方的评论区重排至右侧推荐视频栏区域，实现一边观看视频一边浏览与互动评论。
 
-深度重构升级至 **v3.2**，全面适配 YouTube 最新改版与网格布局，彻底解决分集区块（播放列表/剧集）、分段区块（章节/转写）与评论区的挤压与排版冲突，并引入硬件加速动效，消除展开简介时的重排卡顿。
+深度重构升级至 **v3.3**，全面适配 YouTube 最新改版与网格布局，彻底解决分集区块（播放列表/剧集）、分段区块（章节/转写）与评论区的挤压与排版冲突，引入硬件加速动效消除简介展开卡顿，并增加回复 Continuation 作用域隔离与节流锁，彻底杜绝子回复重复刷屏。
 
 ---
 
@@ -21,12 +21,12 @@
   - 原生支持播放列表的折叠状态（`collapsed`），收起时仅占一行标题栏，展开时自适应限制高度并独立滚动。
 - **智能多面板共存与防冲突机制**：
   - **分段 + 分集 + 评论 三者共存**：当用户同时展开章节与播放列表时，自动触发紧凑排版模式（`has-multiple-panels`），每个面板合理压缩限高，为下方的评论区保留充足的可视空间。
-- **硬件加速丝滑拉长动效（v3.2 优化）**：
+- **硬件加速丝滑拉长动效**：
   - 展开/折叠视频详情（简介）时，侧边栏高度平滑延伸对齐，采用 CSS `cubic-bezier(0.2, 0.9, 0.3, 1)` 硬件加速过渡；
   - 废弃引起 Layout Thrashing（布局抖动）的每帧 `ResizeObserver` 轮询计算，改为按状态触发单次高度分配，实现真正的 60/120fps 满帧平滑拉长。
-- **评论平滑加载与无限滚动**：
-  - 移除导致透明度被锁死的异常探针，进入页面即刻唤醒渲染；
-  - 监听右侧评论区内部滚动触底事件，无缝触发下一页评论数据懒加载。
+- **Continuation 作用域隔离与防重复机制（v3.3 优化）**：
+  - 严格限制懒加载触发范围：仅查询顶层主评论流末尾的 Continuation，**绝对排除**任何位于 `ytd-comment-replies-renderer` 或子楼层内部的回复 Continuation。
+  - 增加 2 秒全局节流锁与状态标志，彻底解决滚屏时误触子回复无限复制重复刷屏的严重 bug。
 - **新旧布局全兼容**：
   - 双重兼容经典 `ytd-watch-flexy` 与新一代 `ytd-watch-grid` 容器。
   - 自动屏蔽 YouTube 实验性的简易侧边评论，防止双份评论区冲突。
@@ -61,7 +61,7 @@ flowchart TD
     B -- 是 --> D[ensureSecondaryVisible 确保右侧栏展开]
     D --> E[隐藏 #related 推荐视频]
     E --> F[moveCommentsToSidebar 挂载评论至 #secondary-inner]
-    F --> G[triggerCommentsLoad 语义化唤醒评论数据]
+    F --> G[triggerCommentsLoad 语义化唤醒主评论数据]
     G --> H[updateSidebarLayout 动态布局仲裁]
     H --> I{是否存在展开的分段/分集面板?}
     I -- 同时存在 --> J[激活 has-multiple-panels 紧凑限高 28vh]
@@ -69,7 +69,7 @@ flowchart TD
     J --> L[简介展开/收起监听: setupDescriptionObserver]
     K --> L
     L --> M[单次计算目标高度 + CSS 硬件加速过渡 0.35s 补间]
-    M --> N[评论区丝滑拉长/回缩，平滑无卡顿]
+    M --> N[setupCommentsScrollListener 仅过滤顶层主评论 + 节流锁]
 ```
 
 ---
